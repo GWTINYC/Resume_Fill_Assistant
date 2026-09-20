@@ -18,7 +18,7 @@ export function pageBridge(args) {
   const signature=(el,radio)=>JSON.stringify([radio?groupLabel(el):labelOf(el),el.getAttribute('name'),el.tagName,el.type]);
   const consent=/同意|隐私|条款|声明|承诺|订阅|验证码|密码|consent|privacy|terms|agree|declaration|certif|subscribe|password|captcha/i;
   if(args.action==='scan'){
-    const state={token:args.token,url:location.href,entries:new Map()};globalThis.__jevApply=state;
+    const state={token:args.token,url:location.href,title:document.title,entries:new Map()};globalThis.__jevApply=state;
     const fields=[];const seenRadios=new Set();
     const elements=document.querySelectorAll('input,textarea,select,[role="combobox"]');
     for(const el of elements){
@@ -48,21 +48,25 @@ export function pageBridge(args) {
         const selected=el.selectedOptions[0];
         if(selected&&(/^(请选择|选择|please select|select|choose|--)/i.test(clean(selected.textContent))||selected.disabled))hasValue=false;
       }
-      const field={id,label,name:clean(el.name),type:radios?'radio':type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required,hasValue,options,supported,reason:supported?'':type==='file'?'附件需要手动上传':'自定义或暂不支持的控件，需要手动填写'};
+      const field={id,label,name:clean(el.name),type:radios?'radio':type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required,maxLength:el.maxLength>0?el.maxLength:null,hasValue,options,supported,reason:supported?'':type==='file'?'附件需要手动上传':'自定义或暂不支持的控件，需要手动填写'};
       fields.push(field);state.entries.set(id,{el,radios,signature:signature(el,!!radios)});
       if(fields.length>=100)break;
     }
-    return {fields,url:location.href,title:document.title,atLimit:fields.length>=100};
+    return {fields,url:location.href,title:document.title,pageContext:{title:clean(document.title),headings:Array.from(document.querySelectorAll('h1,h2,h3')).slice(0,12).map(x=>clean(x.innerText)),description:clean(document.querySelector('meta[name="description"]')?.content)},atLimit:fields.length>=100};
   }
-  if(args.action==='fill'){
+  if(args.action==='fill'||args.action==='verify'){
     const state=globalThis.__jevApply;
-    if(!state||state.token!==args.token||state.url!==location.href)return {results:args.items.map(x=>({id:x.id,ok:false,reason:'页面已变化，请重新扫描'}))};
+    if(!state||state.token!==args.token||state.url!==location.href||state.title!==document.title)return {results:args.items.map(x=>({id:x.id,ok:false,reason:'页面已变化，请重新扫描'}))};
     const results=[];
     for(const item of args.items){
       const entry=state.entries.get(item.id);
       if(!entry){results.push({id:item.id,ok:false,reason:'字段已失效'});continue;}
       const {el,radios}=entry;
-      if(!visible(el)||el.readOnly||signature(el,!!radios)!==entry.signature){results.push({id:item.id,ok:false,reason:'字段已变化，请重新扫描'});continue;}
+      if((args.action==='verify'?!el.isConnected:(!visible(el)||el.readOnly))||signature(el,!!radios)!==entry.signature){results.push({id:item.id,ok:false,reason:'字段已变化，请重新扫描'});continue;}
+      if(args.action==='verify'){
+        const actual=radios?radios.find(x=>x.checked)?.value:el.value;const valid=radios?radios.every(x=>x.validity.valid):!el.validity||el.validity.valid;
+        const ok=String(actual??'')===String(item.value)&&valid;results.push({id:item.id,ok,reason:ok?'已填入并读取核验一致':!valid?'网页格式校验未通过，请检查':'网页未保留预期值，请手动检查'});continue;
+      }
       // Re-evaluate the current state immediately before writing.
       const current=radios?radios.find(x=>x.checked)?.value:el.value;
       const placeholder=el.tagName==='SELECT'&&el.selectedOptions[0]&&(/^(请选择|选择|please select|select|choose|--)/i.test(clean(el.selectedOptions[0].textContent))||el.selectedOptions[0].disabled);

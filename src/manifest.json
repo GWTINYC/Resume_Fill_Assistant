@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jev Apply · 网申助手",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "本地保存个人资料，用 DeepSeek 或 Jev 识别与填写网申字段，预览后填入。支持 Chrome 与 Edge。",
   "minimum_chrome_version": "140",
   "permissions": ["activeTab", "scripting", "storage", "sidePanel"],
