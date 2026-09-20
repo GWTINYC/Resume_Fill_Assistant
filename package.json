@@ -1,12 +1,13 @@
 {
   "name": "jev-apply",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
     "test": "node --test tests/core.test.mjs",
-    "test:browser": "node tests/browser.mjs"
+    "test:browser": "node tests/browser.mjs",
+    "test:deepseek": "node tests/deepseek.browser.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "^6.3.289"

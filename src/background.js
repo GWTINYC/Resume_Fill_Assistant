@@ -1,5 +1,6 @@
 import {pageBridge} from './page.js';
 import {getApiKey} from './storage.js';
+import {deepseekPayload,validateDeepseekFills} from './deepseek.js';
 chrome.action.onClicked.addListener(tab=>{if(tab.windowId!==undefined)chrome.sidePanel.open({windowId:tab.windowId}).catch(()=>{});});
 async function inject(tabId,args,frameIds){
   if(!Number.isInteger(tabId))throw Error('请先打开一个网申页面，再点击扩展图标。');
@@ -21,6 +22,17 @@ async function handle(message){
       catch{all.push(...items.map(x=>({id:`${frameId}:${x.id}`,ok:false,reason:'无法访问该框架，请重新扫描'})));}
     }
     return {results:all};
+  }
+  if(message.action==='deepseek-fill'){
+    const apiKey=await getApiKey('deepseek');if(!apiKey)throw Error('请先保存 DeepSeek 官方 API key。');
+    const {fields,sources}=message;
+    if(!Array.isArray(fields)||!Array.isArray(sources)||JSON.stringify({fields,sources}).length>250000)throw Error('请求过大，请减少启用素材或字段。');
+    const payload=deepseekPayload(fields,sources);
+    const response=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(90000),redirect:'error'});
+    if(!response.ok){const hints={401:'DeepSeek 密钥无效',402:'DeepSeek 账户余额不足',403:'DeepSeek 账户没有访问权限',429:'DeepSeek 请求达到限额，请稍后重试',503:'DeepSeek 服务繁忙，请稍后重试'};throw Error(hints[response.status]||`DeepSeek 返回 HTTP ${response.status}`);}
+    const json=await response.json();const choice=json.choices?.[0];if(choice?.finish_reason!=='stop')throw Error('DeepSeek 结果不完整，未采用这批填写建议；请减少资料或稍后重试。');
+    let data;try{data=JSON.parse(choice.message.content);}catch{throw Error('DeepSeek 返回了空内容或无效 JSON，请重试。');}
+    return {...validateDeepseekFills(data,fields,sources),usage:json.usage,model:json.model};
   }
   if(message.action==='evaluate'){
     const apiKey=await getApiKey();if(!apiKey)throw Error('请先在侧栏输入 API key。');
