@@ -1,0 +1,10 @@
+node_modules/
+dist/
+test-artifacts/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+*.pdf
+jev-apply-profile.json

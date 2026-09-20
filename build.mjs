@@ -1,0 +1,10 @@
+import {build} from 'esbuild';
+import {mkdir,cp,rm} from 'node:fs/promises';
+const dist='dist';await rm(dist,{recursive:true,force:true});await mkdir(dist,{recursive:true});
+await build({entryPoints:['src/background.js','src/panel.js','src/options.js'],bundle:true,outdir:dist,format:'esm',target:'chrome116',minify:false,legalComments:'eof'});
+for(const name of ['manifest.json','panel.html','options.html','shared.css','icons'])await cp('src/'+name,dist+'/'+name,{recursive:true});
+await mkdir(dist+'/vendor',{recursive:true});
+await cp('node_modules/pdfjs-dist/build/pdf.worker.mjs',dist+'/vendor/pdf.worker.mjs');
+for(const name of ['cmaps','standard_fonts','wasm'])await cp('node_modules/pdfjs-dist/'+name,dist+'/vendor/'+name,{recursive:true});
+await cp('node_modules/pdfjs-dist/LICENSE',dist+'/vendor/PDFJS-LICENSE');
+console.log('Built unpacked extension at dist/');

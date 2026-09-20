@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Jev Apply · 网申助手",
+  "version": "0.2.0",
+  "description": "本地保存个人资料，用 Jev 匹配网申字段，预览后填入。支持 Chrome 与 Edge。",
+  "minimum_chrome_version": "140",
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel"],
+  "host_permissions": ["https://api.typesafe.ai/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_title": "打开 Jev Apply 网申助手", "default_icon": {"16":"icons/16.png","48":"icons/48.png","128":"icons/128.png"}},
+  "side_panel": {"default_path": "panel.html"},
+  "options_page": "options.html",
+  "icons": {"16":"icons/16.png","48":"icons/48.png","128":"icons/128.png"},
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'self'; worker-src 'self'"}
+}
