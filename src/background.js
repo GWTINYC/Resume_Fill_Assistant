@@ -12,7 +12,13 @@ async function handle(message){
     try{results=await inject(message.tabId,{action:'scan',token});}
     catch{results=await inject(message.tabId,{action:'scan',token},[0]);limited=true;}
     const fields=results.flatMap(r=>(r.result?.fields||[]).map(f=>({...f,localId:f.id,id:`${r.frameId}:${f.id}`,frameId:r.frameId})));
-    return {token,fields,pageContext:results.find(r=>r.frameId===0)?.result?.pageContext||{},limited,atLimit:results.some(r=>r.result?.atLimit),frameCount:results.length};
+    const sections=results.flatMap(r=>(r.result?.sections||[]).map(s=>({...s,localId:s.id,id:`${r.frameId}:${s.id}`,frameId:r.frameId})));
+    return {token,fields,sections,pageContext:results.find(r=>r.frameId===0)?.result?.pageContext||{},limited,atLimit:results.some(r=>r.result?.atLimit),frameCount:results.length};
+  }
+  if(message.action==='add-record'){
+    if(!Number.isInteger(message.frameId)||typeof message.sectionId!=='string')throw Error('无效的经历章节');
+    const results=await inject(message.tabId,{action:'add-record',token:message.token,sectionId:message.sectionId,target:message.target},[message.frameId]);
+    const result=results[0]?.result;if(!result?.ok)throw Error(result?.reason||'未确认新增成功');return result;
   }
   if(message.action==='fill'||message.action==='verify'){
     const frames=new Map();for(const item of message.items){if(!frames.has(item.frameId))frames.set(item.frameId,[]);frames.get(item.frameId).push({id:item.localId,value:item.value});}

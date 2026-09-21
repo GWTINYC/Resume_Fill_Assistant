@@ -67,6 +67,56 @@ export async function pageBridge(args) {
   };
   const readOptions=popup=>[...popup.querySelectorAll(choiceSelector)].filter(visible).map(node=>({node,value:clean(node.textContent),label:clean(node.textContent),disabled:disabled(node)}));
   const safeOptions=options=>options.length>0&&options.length<=200&&options.every(o=>o.value)&&new Set(options.map(o=>o.value)).size===options.length;
+  const sectionCategory=title=>({'教育经历':'education','实习经历':'internship','工作经历':'work','项目经历':'project','课题项目经验':'project'}[title]);
+  const addText=node=>clean(node.getAttribute('aria-label')||node.textContent).replace(/^[+＋]\s*/,'').replace(/\s+/g,'');
+  const allowedAdd=(node,title)=>{
+    const action=node.closest('button,a,[role="button"]')||node;
+    if(!action.matches('button,a,[role="button"]')&&action.querySelector('button,a,[role="button"],input,textarea,select'))return null;
+    if(!visible(action)||!['添加'+title,'新增'+title].includes(addText(action)))return null;
+    if(action.matches('button')&&action.type==='submit')return null;
+    if(action.matches('a')&&action.getAttribute('href')&&!action.getAttribute('href').startsWith('#'))return null;
+    return action;
+  };
+  const discoverSections=()=>{
+    const sections=[],seen=new Set();
+    for(const form of document.querySelectorAll('.form')){
+      if(!visible(form))continue;const control=form.querySelector('input,textarea,select,.phoenix-radio-group');if(!control)continue;
+      const {title,scope}=sectionInfo(control),category=sectionCategory(title);if(!scope||!category||seen.has(scope))continue;seen.add(scope);
+      const forms=[...scope.querySelectorAll('.form')].filter(visible);if(!forms.length)continue;
+      const buttons=new Set();for(const node of scope.querySelectorAll('button,a,[role="button"],div,span')){const b=allowedAdd(node,title);if(b&&scope.contains(b)&&!forms.some(f=>f.contains(b)))buttons.add(b);}
+      const candidates=[...buttons].filter(b=>![...buttons].some(other=>b!==other&&b.contains(other)));
+      const pending=globalThis.__jevApplyAddPending;
+      let blocked='';if(pending&&pending.url===location.href&&pending.category===category){
+        if(pending.scope===scope&&forms.length===pending.before+1&&!pending.failed)globalThis.__jevApplyAddPending=null;
+        else blocked='上次新增尚未确认或页面发生异常，请检查新增栏位；不要连续重试，必要时刷新页面。';
+      }
+      sections.push({id:'s'+sections.length,title,category,count:forms.length,canAdd:candidates.length===1,blocked,scope,forms,button:candidates.length===1?candidates[0]:null});
+    }
+    return sections;
+  };
+  const publicSection=({scope,forms,button,...data})=>data;
+  if(args.action==='add-record'){
+    const state=globalThis.__jevApply,previous=state?.sections?.get(args.sectionId);
+    if(!state||state.token!==args.token||state.url!==location.href||state.title!==document.title||!previous)return {ok:false,reason:'页面已变化，请重新扫描'};
+    const current=discoverSections().find(s=>s.scope===previous.scope);
+    if(!current||current.blocked||!current.canAdd||current.button!==previous.button||current.count!==previous.count||current.category!==previous.category)return {ok:false,reason:current?.blocked||'章节或添加按钮已变化，请重新扫描'};
+    if(!Number.isInteger(args.target)||args.target<=current.count||args.target>10)return {ok:false,reason:'不需要新增或目标数量不合法'};
+    // Save existing controls and their values before the only permitted click.
+    const before=[...current.scope.querySelectorAll('input,textarea,select')].map(el=>({el,value:el.value,checked:el.checked}));
+    const customs=[...current.scope.querySelectorAll('.phoenix-select,.phoenix-radio-group')].map(el=>({el,kind:el.matches('.phoenix-radio-group')?'custom-radio':'custom-select'})).map(entry=>({...entry,value:customValue(entry)}));
+    const pending={url:location.href,scope:current.scope,category:current.category,before:current.count,failed:false};globalThis.__jevApplyAddPending=pending;
+    state.token=null;current.button.click();
+    for(let i=0;i<30;i++){
+      await pause(100);
+      if(location.href!==state.url||document.title!==state.title||!current.scope.isConnected){pending.failed=true;return {ok:false,reason:'新增期间页面跳转或章节被替换，请手动核对'};}
+      const count=[...current.scope.querySelectorAll('.form')].filter(visible).length;
+      if(count===current.count)continue;
+      const preserved=before.every(x=>x.el.isConnected&&x.el.value===x.value&&x.el.checked===x.checked)&&customs.every(x=>x.el.isConnected&&customValue(x)===x.value);
+      if(count!==current.count+1||!preserved){pending.failed=true;return {ok:false,reason:'新增数量异常或原栏位发生变化，已停止自动操作，请手动核对'};}
+      globalThis.__jevApplyAddPending=null;return {ok:true,count};
+    }
+    return {ok:false,reason:'点击后 3 秒内未确认新增，已停止以避免重复添加；请等待页面完成或手动检查。'};
+  }
   if(args.action==='scan'){
     const state={token:args.token,url:location.href,title:document.title,entries:new Map()};globalThis.__jevApply=state;
     const fields=[],seenRadios=new Set();
@@ -107,7 +157,8 @@ export async function pageBridge(args) {
       fields.push({id,label,name:clean(el.name),type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required||el.getAttribute('aria-required')==='true'||!!item?.querySelector('.form-item__required'),maxLength,hasValue,options,supported,reason:supported?'':type==='file'?'附件需要手动上传':reason});state.entries.set(id,entry);
       if(fields.length>=100)break;
     }
-    return {fields,url:location.href,title:document.title,pageContext:{title:clean(document.title),headings:[...new Set([...document.querySelectorAll('h1,h2,h3')].map(x=>clean(x.innerText)).concat(fields.map(f=>f.context.split(' · ')[0])))].filter(Boolean).slice(0,20),description:clean(document.querySelector('meta[name="description"]')?.content)},atLimit:fields.length>=100};
+    const sections=discoverSections();state.sections=new Map(sections.map(s=>[s.id,s]));
+    return {fields,sections:sections.map(publicSection),url:location.href,title:document.title,pageContext:{title:clean(document.title),headings:[...new Set([...document.querySelectorAll('h1,h2,h3')].map(x=>clean(x.innerText)).concat(fields.map(f=>f.context.split(' · ')[0])))].filter(Boolean).slice(0,20),description:clean(document.querySelector('meta[name="description"]')?.content)},atLimit:fields.length>=100};
   }
   if(args.action==='fill'||args.action==='verify'){
     const state=globalThis.__jevApply;if(!state||state.token!==args.token||state.url!==location.href||state.title!==document.title)return {results:args.items.map(x=>({id:x.id,ok:false,reason:'页面已变化，请重新扫描'}))};

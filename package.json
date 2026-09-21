@@ -1,6 +1,6 @@
 {
   "name": "jev-apply",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "test:deepseek": "node tests/deepseek.browser.mjs",
     "test:collaboration": "node tests/collaboration.browser.mjs",
     "test:recruiting": "node tests/recruiting.browser.mjs",
-    "lab": "node tools/recruiting-lab.mjs"
+    "lab": "node tools/recruiting-lab.mjs",
+    "test:record-slots": "node tests/record-slots.browser.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "^6.3.289"

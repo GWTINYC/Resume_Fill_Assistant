@@ -124,3 +124,19 @@ test('date ranges never manufacture a day from the next year prefix',()=>{
  const sources=[{id:'cv',text:'教育背景：\n硕士：示例大学\n2024.09-2027.06'}],index=materialIndex(sources);const dates=index.passages.filter(p=>p.label==='原文日期').map(p=>p.text);assert.deepEqual(dates,['2024.09','2027.06']);
  const field={id:'date',type:'date',supported:true};const proposal={fieldId:'date',value:'2024-09-20',evidence:[{sourceId:'cv',quote:'2024.09-20'}]};assert.equal(validateDeepseekFills({fills:[proposal]},[field],sources).fills.length,0);
 });
+
+import {recordTargets,ensureRecordSlots} from '../src/record-slots.js';
+test('record targets count records, not fields or duplicate material copies',()=>{
+ const text='教育经历：\n硕士：甲大学\n本科：乙大学\n实习经历：\n公司：示例甲\n公司：示例乙';
+ assert.deepEqual(recordTargets([{id:'a',text},{id:'b',text}]),{education:2,internship:2});
+ assert.equal(recordTargets([{id:'education.0.school',text:'甲'},{id:'education.0.major',text:'专业'},{id:'education.1.school',text:'乙'}]).education,2);
+ assert.throws(()=>recordTargets([{id:'a',text},{id:'b',text:'实习经历：\n公司：示例甲'}]),/数量不一致/);
+});
+test('record expansion stops on cancellation, ambiguity or failed growth',async()=>{
+ const sources=[{id:'a',text:'实习经历：\n公司：甲\n公司：乙'}];const section={id:'s0',category:'internship',title:'实习经历',count:1,canAdd:true};let clicks=0;
+ const deps={sources,sections:[section],assertFresh:async()=>{},add:async()=>{clicks++;return {ok:false,reason:'未新增'}},rescan:async()=>[section]};
+ await assert.rejects(ensureRecordSlots(deps),/未新增/);assert.equal(clicks,1);
+ await assert.rejects(ensureRecordSlots({...deps,sections:[section,{...section,id:'s1'}]}),/多个章节/);assert.equal(clicks,1);
+ await assert.rejects(ensureRecordSlots({...deps,assertFresh:async()=>{throw Error('已停止')}}),/已停止/);assert.equal(clicks,1);
+ await assert.rejects(ensureRecordSlots({...deps,add:async()=>({ok:true})}),/数量不符合/);
+});
