@@ -15,7 +15,7 @@ async function profile(){
 async function keyStatus(){const [jev,deepseek]=await Promise.all([getApiKey('jev'),getApiKey('deepseek')]);$('key-info').textContent=(provider==='jev'?jev:deepseek)?'已持久保存':'未设置';$('team-keys').textContent=`DeepSeek：${deepseek?'已配置':'未配置'} · Jev：${jev?'已配置':'未配置'}。配置好两套密钥后可一键启动。`;}
 function providerUI(){
  $('provider').value=provider;$('match').textContent=provider==='deepseek'?'DeepSeek 智能填写':'Jev 智能匹配';$('provider-model').textContent=provider==='deepseek'?`官方接口 · ${DEEPSEEK_MODEL} · 密钥与 Jev 分开保存`:'官方接口 · jev-1.13.0 · 密钥与 DeepSeek 分开保存';
- $('data-notice').textContent=provider==='deepseek'?'点击 DeepSeek 智能填写，会将网页字段、已保存的个人资料、补充备注和启用素材的文本发送给 DeepSeek，生成带出处的填写建议。原始 PDF / TXT 文件不上传。':'扫描和精确名称匹配在本地进行。点击 Jev 智能匹配会发送字段名称、选项及资料项目名称；选项匹配会额外发送相关单项值。素材全文与备注不发送给 Jev。';
+ $('data-notice').textContent=provider==='deepseek'?'点击 DeepSeek 智能填写，会将网页字段、已保存的个人资料、补充备注和启用素材的文本发送给 DeepSeek，按栏目语义匹配素材原文，提供带出处的填写建议。原始 PDF / TXT 文件不上传。':'扫描和精确名称匹配在本地进行。点击 Jev 智能匹配会发送字段名称、选项及资料项目名称；选项匹配会额外发送相关单项值。素材全文与备注不发送给 Jev。';
 }
 function setEntry(field,id,source='手动选择',checked=true){
  const e=entries.find(x=>x.id===id);const value=e?defaultFieldValue(field,e.value):null;
@@ -96,7 +96,7 @@ function showCollaboration(progress){
   if(!record.proposal){const current=plan.get(record.fieldId);if(current){current.checked=false;current.result=record.status==='needs_review'?record.reason:undefined;}continue;}
   const labels={checking:'等待 Jev 校核',approved:'Jev 校核通过',needs_review:'需人工核对',filled:'协作已填入',failed:'网页核验未通过'};
   const p={entryId:'',value:record.proposal.value,source:labels[record.status]||'协作草案',ai:true,evidence:record.proposal.evidence,reason:record.proposal.reason,checked:false,result:record.reason};
-  if(record.review){const r=record.review;p.auditDescription=`${r.policy==='expression'?'开放表达':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核字段、事实依据和素材冲突':'Jev 校核存在疑问'}${record.history.length>1?' · 已修正复核':''}`;}
+  if(record.review){const r=record.review;p.auditDescription=`${r.policy==='passage'?'原文段落':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核栏目对应、原文完整性和素材冲突':'Jev 校核存在疑问'}${record.history.at(-1)?.round>1?' · 已修正复核':''}`;}
   plan.set(record.fieldId,p);
  }
  status(progress.message);render();showUsage();
