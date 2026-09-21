@@ -60,7 +60,7 @@ test('semantic category prompts permit synonyms but forbid rewriting in both mod
  }
  const packet=auditPackets([aboutProposal(teamSources[1].text)],teamFields,teamSources)[0];
  assert(packet.payload.questions.q0_fit.instructions.includes('个人技能'));
- assert(packet.payload.questions.q0_unsupported.instructions.includes('complete prepared passage'));
+ assert(packet.payload.questions.q0_unsupported.instructions.includes('complete relevant prepared passage'));
 });
 test('verbatim gate preserves multiline wording but rejects paraphrase, translation and stitching',()=>{
  const source={id:'cv',label:'个人技能',text:'个人技能：\n熟悉 React；参与页面开发。\n能够与团队沟通需求。\n其他：英语四级。'};
@@ -88,4 +88,39 @@ test('reviewer approval cannot override the local no-rewriting rule',async()=>{
  let writes=0;
  const result=await runCollaboration({fields:[teamFields[1]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},draft:async()=>({fills:[aboutProposal('具备前端开发与团队协作能力。')]}),judge:async p=>teamJudge(p),apply:async()=>{writes++;return {ok:true}}});
  assert.equal(writes,0);assert.equal(result[0].status,'needs_review');assert.match(result[0].reason,/连续原文/);
+});
+
+import {materialIndex,recordEvidenceMatches} from '../src/material-index.js';
+test('indexed passages copy original whitespace without model reproduction',()=>{
+ const sources=[{id:'cv',label:'素材',text:'个人能力：\n\n1. 熟悉 React。\n\n2. 能够协作。\u00a0   \n'}];const index=materialIndex(sources);const passage=index.passages.find(p=>p.kind==='block'&&p.category==='skills');
+ const field={id:'skills',label:'个人技能',type:'textarea',supported:true};const result=validateDeepseekFills({fills:[{fieldId:'skills',passageId:passage.id}]},[field],sources);
+ assert.equal(result.fills[0].value,passage.text);assert.equal(result.fills[0].evidence[0].quote,passage.text);assert(sources[0].text.includes(passage.text));
+ assert.equal(validateDeepseekFills({fills:[{fieldId:'skills',passageId:passage.id,value:'熟悉 React，善于协作。'}]},[field],sources).fills.length,0);
+});
+test('material records cannot be interchanged even when both values are original',()=>{
+ const sources=[{id:'cv',label:'素材',text:'教育背景：\n硕士：甲大学\n甲学院\n动力工程\n2024.09-2027.06\n本科：乙大学\n乙学院\n车辆工程\n2020.09-2024.06\n实习经历：\n公司：示例甲\n部门：研发\n公司：示例乙\n部门：产品'}];
+ const index=materialIndex(sources);const wrong=index.passages.find(p=>p.text==='车辆工程');const right=index.passages.find(p=>p.text==='动力工程');const field={id:'major',label:'专业名称',context:'教育经历 · 第 1 条（页面顺序）',type:'text',supported:true};
+ assert.equal(validateDeepseekFills({fills:[{fieldId:'major',passageId:right.id}]},[field],sources).fills[0].value,'动力工程');
+ const rejected=validateDeepseekFills({fills:[{fieldId:'major',passageId:wrong.id}]},[field],sources);assert.equal(rejected.fills.length,0);assert.match(rejected.issues[0].reason,/经历/);
+ assert.equal(validateDeepseekFills({fills:[{fieldId:'major',value:'车辆工程',evidence:[{sourceId:'cv',quote:'车辆工程'}]}]},[field],sources).fills.length,0);
+ const internship={context:'实习经历 · 第 2 条'};assert(!recordEvidenceMatches(internship,[{sourceId:'cv',quote:'示例甲'}],index,sources));assert(recordEvidenceMatches(internship,[{sourceId:'cv',quote:'示例乙'}],index,sources));
+});
+test('indexed descriptions require complete blocks instead of single headings',()=>{
+ const sources=[{id:'cv',text:'实习经历：\n公司：示例公司\n岗位：工程师\n项目标题\n\n1. 目标：完成开发。\n\n2. 工作内容：\n\n(1) 开发页面。\n\n(2) 编写测试。\n\n3. 成果：按时上线。'}];const index=materialIndex(sources);
+ const field={id:'desc',label:'实习内容',context:'实习经历 · 第 1 条',type:'textarea',supported:true};const title=index.passages.find(p=>p.text==='项目标题');const body=index.passages.find(p=>p.label==='工作内容');
+ assert.equal(validateDeepseekFills({fills:[{fieldId:'desc',passageId:title.id}]},[field],sources).fills.length,0);assert.equal(validateDeepseekFills({fills:[{fieldId:'desc',passageId:body.id}]},[field],sources).fills[0].value,'(1) 开发页面。\n\n(2) 编写测试。');
+});
+
+test('campus practice cannot borrow a personal project when its own material is missing',()=>{
+ const sources=[{id:'cv',text:'个人项目经历：\n测试项目\n\n1. 目标：学习方法。\n\n2. 工作内容：\n完成验证。'}];const index=materialIndex(sources),passage=index.passages.find(p=>p.label==='工作内容');const field={id:'practice',label:'实践描述',context:'在校实践 · 第 1 条',type:'textarea',supported:true};
+ assert.equal(validateDeepseekFills({fills:[{fieldId:'practice',passageId:passage.id}]},[field],sources).fills.length,0);
+ assert.equal(validateDeepseekFills({fills:[{fieldId:'practice',value:'完成验证。',evidence:[{sourceId:'cv',quote:'完成验证。'}]}]},[field],sources).fills.length,0);
+});
+test('confirmed structured education values remain available to matching record candidates',()=>{
+ const sources=[{id:'education.0.school',label:'学校',text:'示例大学'}],field={id:'school',label:'学校名称',context:'教育经历 · 第 1 条',type:'text',supported:true};const input=JSON.parse(deepseekPayload([field],sources).messages.at(-1).content);assert(input.fields[0].candidatePassageIds.length>0);assert.equal(validateDeepseekFills({fills:[{fieldId:'school',passageId:input.fields[0].candidatePassageIds[0]}]},[field],sources).fills[0].value,'示例大学');
+});
+
+test('date ranges never manufacture a day from the next year prefix',()=>{
+ const sources=[{id:'cv',text:'教育背景：\n硕士：示例大学\n2024.09-2027.06'}],index=materialIndex(sources);const dates=index.passages.filter(p=>p.label==='原文日期').map(p=>p.text);assert.deepEqual(dates,['2024.09','2027.06']);
+ const field={id:'date',type:'date',supported:true};const proposal={fieldId:'date',value:'2024-09-20',evidence:[{sourceId:'cv',quote:'2024.09-20'}]};assert.equal(validateDeepseekFills({fills:[proposal]},[field],sources).fills.length,0);
 });

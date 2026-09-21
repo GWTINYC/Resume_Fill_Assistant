@@ -1,0 +1,535 @@
+[
+  {
+    "title": "个人信息",
+    "repeatable": false,
+    "fields": [
+      {
+        "label": "姓名",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "性别",
+        "required": true,
+        "kind": "radio",
+        "placeholder": "",
+        "maxLength": null,
+        "options": [
+          "男",
+          "女"
+        ]
+      },
+      {
+        "label": "身高(厘米)",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "体重(公斤)",
+        "required": true,
+        "kind": "text",
+        "placeholder": "体重是公斤不是斤哦，请注意单位~",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "出生日期",
+        "required": true,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "邮箱",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "手机号",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入11位手机号",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "证件号码",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "证件照",
+        "required": true,
+        "kind": "file",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "民族",
+        "required": true,
+        "kind": "select",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "籍贯",
+        "required": true,
+        "kind": "select",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "最高学历",
+        "required": true,
+        "kind": "select",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "是否通过英语四级",
+        "required": true,
+        "kind": "radio",
+        "placeholder": "",
+        "maxLength": null,
+        "options": [
+          "是",
+          "否"
+        ]
+      },
+      {
+        "label": "挂科门数",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "应届/往届",
+        "required": true,
+        "kind": "radio",
+        "placeholder": "",
+        "maxLength": null,
+        "options": [
+          "应届",
+          "往届"
+        ]
+      },
+      {
+        "label": "学习形式",
+        "required": false,
+        "kind": "select",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "毕业时间",
+        "required": true,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "紧急联系人",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "紧急联系电话",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "招聘信息的来源",
+        "required": true,
+        "kind": "select",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "是否接受岗位、地点等调剂",
+        "required": true,
+        "kind": "radio",
+        "placeholder": "",
+        "maxLength": null,
+        "options": [
+          "是",
+          "否"
+        ]
+      }
+    ]
+  },
+  {
+    "title": "个人信息",
+    "repeatable": false,
+    "fields": [
+      {
+        "label": "自我评价",
+        "required": false,
+        "kind": "textarea",
+        "placeholder": "请输入",
+        "maxLength": 2000,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "教育经历",
+    "repeatable": true,
+    "fields": [
+      {
+        "label": "学校名称",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "学院名称",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "开始时间",
+        "required": true,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "结束时间",
+        "required": true,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "专业名称",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "学历",
+        "required": true,
+        "kind": "select",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "是否为海外留学经历",
+        "required": true,
+        "kind": "radio",
+        "placeholder": "",
+        "maxLength": null,
+        "options": [
+          "是",
+          "否"
+        ]
+      }
+    ]
+  },
+  {
+    "title": "技能",
+    "repeatable": true,
+    "fields": [
+      {
+        "label": "技能名称",
+        "required": false,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "掌握程度",
+        "required": false,
+        "kind": "select",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "在校实践",
+    "repeatable": true,
+    "fields": [
+      {
+        "label": "开始时间",
+        "required": false,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "结束时间",
+        "required": false,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "实践名称",
+        "required": false,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "实践描述",
+        "required": false,
+        "kind": "textarea",
+        "placeholder": "请输入",
+        "maxLength": 2000,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "获奖情况",
+    "repeatable": true,
+    "fields": [
+      {
+        "label": "奖项",
+        "required": false,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "获奖描述",
+        "required": false,
+        "kind": "textarea",
+        "placeholder": "请输入",
+        "maxLength": 2000,
+        "options": []
+      },
+      {
+        "label": "获奖时间",
+        "required": false,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "论文/专著",
+    "repeatable": true,
+    "fields": [
+      {
+        "label": "名称",
+        "required": true,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "发布时间",
+        "required": true,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "所属期刊",
+        "required": false,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "课题项目经验",
+    "repeatable": true,
+    "fields": [
+      {
+        "label": "项目名称",
+        "required": false,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "开始时间",
+        "required": false,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "结束时间",
+        "required": false,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "项目描述",
+        "required": false,
+        "kind": "textarea",
+        "placeholder": "请输入",
+        "maxLength": 2000,
+        "options": []
+      },
+      {
+        "label": "项目成果",
+        "required": false,
+        "kind": "textarea",
+        "placeholder": "请输入",
+        "maxLength": 2000,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "实习经历",
+    "repeatable": true,
+    "fields": [
+      {
+        "label": "单位名称",
+        "required": false,
+        "kind": "text",
+        "placeholder": "请输入",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "开始时间",
+        "required": false,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "结束时间",
+        "required": false,
+        "kind": "calendar",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "实习内容",
+        "required": false,
+        "kind": "textarea",
+        "placeholder": "请输入",
+        "maxLength": 2000,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "附件",
+    "repeatable": false,
+    "fields": [
+      {
+        "label": "附件",
+        "required": false,
+        "kind": "file",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "简历附件",
+    "repeatable": false,
+    "fields": [
+      {
+        "label": "简历附件",
+        "required": false,
+        "kind": "file",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "附加问题",
+    "repeatable": false,
+    "fields": [
+      {
+        "label": "为什么想加入欣旺达？",
+        "required": false,
+        "kind": "textarea",
+        "placeholder": "请输入",
+        "maxLength": 32766,
+        "options": []
+      }
+    ]
+  },
+  {
+    "title": "求职意向",
+    "repeatable": false,
+    "fields": [
+      {
+        "label": "期望月薪(税前)",
+        "required": true,
+        "kind": "select",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      },
+      {
+        "label": "期望工作城市",
+        "required": true,
+        "kind": "multi",
+        "placeholder": "",
+        "maxLength": null,
+        "options": []
+      }
+    ]
+  }
+]
