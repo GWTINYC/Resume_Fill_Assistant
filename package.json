@@ -1,6 +1,6 @@
 {
   "name": "jev-apply",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,7 +16,8 @@
     "test:learning": "node tests/learning.browser.mjs",
     "test:import-errors": "node tests/import-errors.browser.mjs",
     "test:native-host": "python3 tests/native-host.test.py",
-    "test:native-keys": "node tests/native-keys.browser.mjs"
+    "test:native-keys": "node tests/native-keys.browser.mjs",
+    "test:complex-select": "node tests/complex-select.browser.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "^6.3.289"

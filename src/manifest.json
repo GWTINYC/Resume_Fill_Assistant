@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Jev Apply · 网申助手",
-  "version": "0.8.0",
-  "description": "本地保存 PDF / TXT 与个人资料，DeepSeek 匹配栏目原文，Jev 校核后自动填入。支持 Chrome 与 Edge。",
+  "version": "0.9.0",
+  "description": "本地保存简历素材；Jev 定位素材范围，DeepSeek 提取原文并适配控件，核验后填入。支持 Chrome 与 Edge。",
   "minimum_chrome_version": "140",
   "permissions": [
     "activeTab",

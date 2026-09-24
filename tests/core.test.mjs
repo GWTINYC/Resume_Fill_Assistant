@@ -44,10 +44,10 @@ const teamSources=[{id:'base.fullName',label:'姓名',text:'陈晓'},{id:'materi
 const teamEntries=[{id:'base.fullName',label:'姓名',aliases:['姓名'],value:'陈晓'}];
 const nameProposal={fieldId:'name',value:'陈晓',evidence:[{sourceId:'base.fullName',quote:'陈晓'}]};
 const aboutProposal=value=>({fieldId:'about',value,evidence:[{sourceId:'material:cv',quote:teamSources[1].text}]});
-function teamJudge(payload){const answers={};payload.state.items.forEach((item,i)=>{const policy=item.field.id==='about'?'passage':'fact';answers[`q${i}_policy`]={type:'choice',choice:policy,confidence:.99,probabilities:{fact:policy==='fact'?1:0,passage:policy==='passage'?1:0,unclear:0}};for(const part of ['fit','unsupported','conflict'])answers[`q${i}_${part}`]={type:'noul',noul:part==='fit'?.99:.01};});return {answers};}
+function teamJudge(payload){const answers={};if(payload.state.stage==='route'){payload.state.fields.forEach((f,i)=>{const r=payload.state.ranges.find(r=>r.sourceId===(f.id==='name'?'base.fullName':'material:cv'));const choice=f.id==='salary'?'none':r.id;answers['q'+i]={type:'choice',choice,confidence:.99,probabilities:{[choice]:.99}};});return {answers};}payload.state.items.forEach((item,i)=>{const policy=item.field.id==='about'?'passage':'fact';answers[`q${i}_policy`]={type:'choice',choice:policy,confidence:.99,probabilities:{fact:policy==='fact'?1:0,passage:policy==='passage'?1:0,unclear:0}};for(const part of ['fit','unsupported','conflict'])answers[`q${i}_${part}`]={type:'noul',noul:part==='fit'?.99:.01};});return {answers};}
 test('audit covers every source character without splitting Unicode code points',()=>{const text='甲🙂\n'.repeat(5000);const sources=[{id:'cv',label:'材料',text}];const chunks=sourceChunks(sources);assert(chunks.length>1);assert.equal(chunks.flat().filter(x=>x.id==='cv').map(x=>x.text).join(''),text);const packets=auditPackets([nameProposal],[teamFields[0]],teamSources);assert(Object.keys(packets[0].payload.questions).length<=8);assert(new TextEncoder().encode(JSON.stringify(packets[0].payload.state)).length<23000);});
-test('collaboration repairs only failed fields; synonymous categories copy the original passage',async()=>{let drafts=0;const applied=[];const feedback=[];const result=await runCollaboration({fields:teamFields,sources:teamSources,entries:teamEntries,assertFresh:async()=>{},draft:async(batch,workflow)=>{drafts++;feedback.push(workflow.feedback);return {fills:batch.flatMap(f=>f.id==='name'?[nameProposal]:f.id==='about'?[aboutProposal(drafts===1?'精通 React，效率提升 50%':teamSources[1].text)]:[])};},judge:async p=>teamJudge(p),apply:async(f,value)=>{applied.push([f.id,value]);return {ok:true,reason:'verified'};}});assert.equal(drafts,2);assert.deepEqual(feedback[1].map(x=>x.fieldId),['about','salary']);assert.equal(result.find(x=>x.fieldId==='about').history.length,2);assert.equal(result.find(x=>x.fieldId==='about').status,'filled');assert.equal(result.find(x=>x.fieldId==='salary').status,'needs_review');assert.equal(applied.length,2);assert(!applied.some(x=>x[1].includes('50%')));});
-test('Jev disagreement that survives repair is never automatically filled',async()=>{let writes=0;const result=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},draft:async()=>({fills:[nameProposal]}),judge:async p=>{const r=teamJudge(p);r.answers.q0_conflict.noul=.8;return r;},apply:async()=>{writes++;return {ok:true}}});assert.equal(writes,0);assert.equal(result[0].status,'needs_review');assert.equal(result[0].history.length,2);});
+test('collaboration repairs only failed fields; synonymous categories copy the original passage',async()=>{let drafts=0;const applied=[];const feedback=[];const result=await runCollaboration({fields:teamFields,sources:teamSources,entries:teamEntries,assertFresh:async()=>{},draft:async(batch,workflow)=>{drafts++;feedback.push(workflow.feedback);return {fills:batch.flatMap(f=>f.id==='name'?[nameProposal]:f.id==='about'?[aboutProposal(drafts===1?'精通 React，效率提升 50%':teamSources[1].text)]:[])};},judge:async p=>teamJudge(p),apply:async(f,value)=>{applied.push([f.id,value]);return {ok:true,reason:'verified'};}});assert.equal(drafts,2);assert.deepEqual(feedback[1].map(x=>x.fieldId),['about']);assert.equal(result.find(x=>x.fieldId==='about').history.length,2);assert.equal(result.find(x=>x.fieldId==='about').status,'filled');assert.equal(result.find(x=>x.fieldId==='salary').status,'needs_review');assert.equal(applied.length,2);assert(!applied.some(x=>x[1].includes('50%')));});
+test('Jev disagreement that survives repair is never automatically filled',async()=>{let writes=0;const result=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},draft:async()=>({fills:[nameProposal]}),judge:async p=>{const r=teamJudge(p);if(p.state.stage!=='route')r.answers.q0_conflict.noul=.8;return r;},apply:async()=>{writes++;return {ok:true}}});assert.equal(writes,0);assert.equal(result[0].status,'needs_review');assert.equal(result[0].history.length,2);});
 test('a reviewer outage cannot silently fall back to unreviewed auto-fill',async()=>{let writes=0;await assert.rejects(runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},draft:async()=>({fills:[nameProposal]}),judge:async()=>{throw Error('review unavailable')},apply:async()=>{writes++;return {ok:true}}}),/review unavailable/);assert.equal(writes,0);});
 test('cancel and changed source snapshots stop writes',async()=>{const controller=new AbortController();let writes=0;await assert.rejects(runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,signal:controller.signal,assertFresh:async()=>{},draft:async()=>({fills:[nameProposal]}),judge:async p=>{controller.abort();return teamJudge(p)},apply:async()=>{writes++;return {ok:true}}}),{name:'AbortError'});let checks=0;await assert.rejects(runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{if(++checks>1)throw Error('changed')},draft:async()=>({fills:[nameProposal]}),judge:async p=>teamJudge(p),apply:async()=>{writes++;return {ok:true}}}),/changed/);assert.equal(writes,0);});
 test('failed DOM readback is reported as failed, not filled',async()=>{const result=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},draft:async()=>({fills:[nameProposal]}),judge:async p=>teamJudge(p),apply:async()=>({ok:false,reason:'page discarded value'})});assert.equal(result[0].status,'failed');});
@@ -218,4 +218,43 @@ test('PC connection errors distinguish missing host from an unauthorized extensi
   }
   globalThis.chrome={runtime:{sendNativeMessage:async()=>({ok:true,value:'PRIVATE-INVALID-KEY'})}};await assert.rejects(()=>nativeKeyRequest({action:'get',provider:'jev'}),e=>e.code==='PC_PROTOCOL_INVALID'&&!e.message.includes('PRIVATE-INVALID'));
  }finally{globalThis.chrome=original;}
+});
+
+import {sourceRanges,routingPackets,routedRange} from '../src/source-routing.js';
+test('Jev assigns material before extraction; second internship scope cannot borrow first internship',()=>{
+ const sources=[{id:'cv',label:'TXT',text:'实习经历\n公司：示例甲\n岗位：开发\n2024.06—2024.09\n公司：示例乙\n岗位：测试\n2025.06—2025.09'}];
+ const f={id:'f',label:'公司名称',context:'实习经历 · 第 2 条',type:'text',supported:true};
+ const range=sourceRanges(sources).find(r=>r.record===2),workflow={collaborative:true,routes:[{fieldId:'f',rangeId:range.id}]};
+ const packets=routingPackets([f],sources).packets;assert(!Object.keys(packets[0].payload.questions.q0.criteria).includes(sourceRanges(sources)[0].id));
+ const input=JSON.parse(deepseekPayload([f],sources,workflow).messages.at(-1).content);assert.equal(input.assignments[0].range.text,range.text);assert.deepEqual(input.sources,[]);assert.deepEqual(input.passages,[]);
+ const fill=(value,quote=value)=>({fieldId:'f',rangeId:range.id,value,quote});
+ assert.equal(validateDeepseekFills({fills:[fill('示例乙')]},[f],sources,workflow).fills[0].value,'示例乙');
+ assert.match(validateDeepseekFills({fills:[fill('示例甲')]},[f],sources,workflow).issues[0].reason,/SOURCE_RANGE/);
+ assert.equal(validateDeepseekFills({fills:[{...fill('示例乙'),rangeId:'r-unknown'}]},[f],sources,workflow).fills.length,0);
+ const date={...f,label:'开始月份',type:'month'};assert.equal(validateDeepseekFills({fills:[fill('2025-06','2025.06')]},[date],sources,workflow).fills[0].value,'2025-06');
+ assert.equal(validateDeepseekFills({fills:[fill('2025-06-01','2025.06')]},[{...date,type:'date'}],sources,workflow).fills.length,0);
+});
+test('routed extraction can take an atomic fact from prose without inventing a pre-indexed answer',()=>{
+ const sources=[{id:'notes',label:'零散信息',text:'我的备用邮箱是 backup@example.test，平时不用。'}],f={id:'email',label:'备用邮箱',type:'email',supported:true};
+ const range=sourceRanges(sources)[0],workflow={routes:[{fieldId:f.id,rangeId:range.id}]};
+ const result=validateDeepseekFills({fills:[{fieldId:f.id,rangeId:range.id,quote:sources[0].text,value:'backup@example.test'}]},[f],sources,workflow);assert.equal(result.fills[0].value,'backup@example.test');
+ const wrong=validateDeepseekFills({fills:[{fieldId:f.id,rangeId:range.id,quote:sources[0].text,value:'other@example.test'}]},[f],sources,workflow);assert.equal(wrong.fills.length,0);
+});
+test('low-confidence routing never reaches DeepSeek or page writes',async()=>{
+ let draft=0,writes=0;
+ const results=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},judge:async p=>{const result=teamJudge(p);result.answers.q0.confidence=.6;return result;},draft:async()=>{draft++;return {fills:[nameProposal]}},apply:async()=>{writes++;return {ok:true}}});
+ assert.equal(draft,0);assert.equal(writes,0);assert.match(results[0].reason,/ROUTE_NONE/);
+});
+test('routing partitions cover every source and competing regions are held as ambiguous',async()=>{
+ const sources=Array.from({length:24},(_,i)=>({id:'s'+i,label:'资料'+i,text:'示例姓名'}));const seen=new Set();let drafts=0;
+ const results=await runCollaboration({fields:[teamFields[0]],sources,entries:[],assertFresh:async()=>{},judge:async p=>{assert.equal(p.state.stage,'route');p.state.ranges.forEach(r=>seen.add(r.sourceId));const id=Object.keys(p.questions.q0.criteria).find(x=>x!=='none');return {answers:{q0:{type:'choice',choice:id,confidence:1,probabilities:{[id]:1}}}}},draft:async()=>{drafts++;return {fills:[]}},apply:async()=>{throw Error('unexpected write')}});
+ assert.equal(seen.size,24);assert.equal(drafts,0);assert.match(results[0].reason,/ROUTE_AMBIGUOUS/);
+});
+test('dynamic selectors permit only grounded original search/path values beyond the observed options',()=>{
+ const sources=[{id:'cv',label:'资料',text:'学校：示例理工大学\n籍贯：浙江省杭州市西湖区'}];
+ for(const [selectionMode,value]of [['search','示例理工大学'],['virtual','示例理工大学'],['cascade','浙江省杭州市西湖区']]){
+  const f={id:'f',label:'信息',type:'custom-select',selectionMode,supported:true,options:[{value:'其他',label:'其他'}]};
+  assert.equal(validateDeepseekFills({fills:[{fieldId:'f',value,evidence:[{sourceId:'cv',quote:sources[0].text}]}]},[f],sources).fills.length,1);
+  assert.equal(validateDeepseekFills({fills:[{fieldId:'f',value:'凭空猜测',evidence:[{sourceId:'cv',quote:sources[0].text}]}]},[f],sources).fills.length,0);
+ }
 });

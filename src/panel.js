@@ -140,7 +140,7 @@ function showCollaboration(progress){
   if(!record.proposal){const current=plan.get(record.fieldId);if(current){current.checked=false;current.result=record.status==='needs_review'?record.reason:undefined;}continue;}
   const labels={checking:'等待 Jev 校核',approved:'Jev 校核通过',needs_review:'需人工核对',filled:'协作已填入',failed:'网页核验未通过'};
   const p={entryId:'',value:record.proposal.value,source:labels[record.status]||'协作草案',ai:true,evidence:record.proposal.evidence,reason:record.proposal.reason,checked:false,result:record.reason};
-  if(record.review){const r=record.review;p.auditDescription=`${r.policy==='passage'?'原文段落':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核栏目对应、原文完整性和素材冲突':'Jev 校核存在疑问'}${record.history.at(-1)?.round>1?' · 已修正复核':''}`;}
+  if(record.review){const r=record.review;p.auditDescription=`${r.policy==='passage'?'原文段落':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核栏目对应、原文完整性和素材冲突':'Jev 校核存在疑问'}${record.route?' · Jev 定位：'+record.route.label+(record.route.record?' 第 '+record.route.record+' 条':''):''}${record.history.at(-1)?.round>1?' · 已修正复核':''}`;}
   plan.set(record.fieldId,p);
  }
  status(progress.message);render();showUsage();

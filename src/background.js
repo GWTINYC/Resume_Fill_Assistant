@@ -51,7 +51,7 @@ async function handle(message){
     if(!response.ok){const hints={401:'DeepSeek 密钥无效',402:'DeepSeek 账户余额不足',403:'DeepSeek 账户没有访问权限',429:'DeepSeek 请求达到限额，请稍后重试',503:'DeepSeek 服务繁忙，请稍后重试'};throw Error(hints[response.status]||`DeepSeek 返回 HTTP ${response.status}`);}
     const json=await response.json();const choice=json.choices?.[0];if(choice?.finish_reason!=='stop')throw Error('DeepSeek 结果不完整，未采用这批填写建议；请减少资料或稍后重试。');
     let data;try{data=JSON.parse(choice.message.content);}catch{throw Error('DeepSeek 返回了空内容或无效 JSON，请重试。');}
-    return {...validateDeepseekFills(data,fields,sources),usage:json.usage,model:json.model};
+    return {...validateDeepseekFills(data,fields,sources,message.workflow||{}),usage:json.usage,model:json.model};
   }
   if(message.action==='evaluate'){
     const apiKey=await getApiKey();if(!apiKey)throw Error('请先在侧栏输入 API key。');

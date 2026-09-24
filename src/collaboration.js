@@ -1,3 +1,4 @@
+import {routingPackets,readRoutes,evidenceInRange} from './source-routing.js';
 import {acceptedChoice,defaultFieldValue,localMapping,normalize} from './core.js';
 import {isVerbatimValue} from './deepseek.js';
 const encoder=new TextEncoder();
@@ -79,12 +80,26 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
  let pending=target;
  for(let round=0;round<2&&pending.length;round++){
   checkSignal(signal);await assertFresh();const candidates=[];
-  for(let i=0;i<pending.length;i+=6){
-   checkSignal(signal);const batch=pending.slice(i,i+6);emit(round?'repair':'draft',`${round?'DeepSeek 正在修正':'DeepSeek 正在理解栏目并匹配原文'} ${i+1}–${Math.min(i+6,pending.length)} / ${pending.length}`);
+  const feedbackFor=f=>({fieldId:f.id,previous:records.get(f.id).proposal?.value||'',problems:records.get(f.id).review?.reasons||[records.get(f.id).reason]});
+  const routing=routingPackets(pending,sources,round?pending.map(feedbackFor):[]),votes=new Map(pending.map(f=>[f.id,[]]));
+  for(const [i,packet]of routing.packets.entries()){
+   checkSignal(signal);await assertFresh();emit('route',`Jev 正在${round?'重新':''}定位素材范围 ${i+1} / ${routing.packets.length}`);
+   const response=await judge(packet.payload);checkSignal(signal);
+   for(const vote of readRoutes(packet,response.answers))votes.get(vote.fieldId).push(vote);
+  }
+  const routed=[];
+  for(const f of pending){
+   const record=records.get(f.id),choices=votes.get(f.id);
+   // More than one independently accepted region is ambiguous, even across partitions.
+   if(choices.length!==1){record.status='needs_review';record.reason=choices.length?'[ROUTE_AMBIGUOUS] 多个素材范围都匹配，请确认使用哪份资料。':'[ROUTE_NONE] Jev 未找到明确对应的素材范围，请补充或整理素材。';record.proposal=null;record.review=null;record.route=null;continue;}
+   record.route={...choices[0],...routing.ranges.find(r=>r.id===choices[0].rangeId)};routed.push(f);
+  }
+  for(let i=0;i<routed.length;i+=6){
+   checkSignal(signal);const batch=routed.slice(i,i+6);emit(round?'repair':'draft',`${round?'DeepSeek 正在修正提取与格式':'DeepSeek 正在指定范围提取原文并适配控件'} ${i+1}–${Math.min(i+6,routed.length)} / ${routed.length}`);
    const feedback=round?batch.map(f=>({fieldId:f.id,previous:records.get(f.id).proposal?.value||'',problems:records.get(f.id).review?.reasons||[records.get(f.id).reason]})):[];
-   const response=await draft(batch,{collaborative:true,feedback,pageContext});checkSignal(signal);
+   const response=await draft(batch,{collaborative:true,feedback,pageContext,routes:batch.map(f=>({fieldId:f.id,rangeId:records.get(f.id).route.rangeId}))});checkSignal(signal);
    const returned=new Map(response.fills.map(p=>[p.fieldId,p]));
-   for(const f of batch){const record=records.get(f.id),proposal=returned.get(f.id);if(!proposal){record.status='needs_review';record.reason=response.issues?.find(x=>x.fieldId===f.id)?.reason||'没有找到语义匹配且可原文填入的素材；请补充资料或手动填写。';record.review=null;record.proposal=null;continue;}record.proposal=proposal;record.status='checking';record.reason='等待 Jev 独立校核';candidates.push(proposal);}
+   for(const f of batch){const record=records.get(f.id),proposal=returned.get(f.id);if(!proposal){record.status='needs_review';record.reason=response.issues?.find(x=>x.fieldId===f.id)?.reason||'没有找到语义匹配且可原文填入的素材；请补充资料或手动填写。';record.review=null;record.proposal=null;continue;}if(!evidenceInRange(proposal,record.route)){record.status='needs_review';record.reason='[SOURCE_RANGE] 引用超出 Jev 指定范围，未采用答案。';record.proposal=null;record.review=null;continue;}record.proposal=proposal;record.status='checking';record.reason='等待 Jev 独立校核';candidates.push(proposal);}
   }
   const packets=auditPackets(candidates,fields,sources,pageContext);if(auditCalls+packets.length>AUDIT_LIMIT)throw Error('本次协作达到校核次数上限，尚未自动填入，请减少字段或素材后重试。');
   const checks=new Map(candidates.map(p=>[p.fieldId,[]]));
@@ -93,7 +108,7 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
    for(const check of readAudit(packet,response.answers))checks.get(check.fieldId).push(check);
   }
   for(const proposal of candidates){const record=records.get(proposal.fieldId);const review=combineAudit(seenFields.get(proposal.fieldId),proposal,entries,checks.get(proposal.fieldId));record.review=review;record.history.push({round:round+1,value:proposal.value,...review});record.status=review.approved?'approved':'needs_review';record.reason=review.approved?'Jev 校核通过，等待填写':review.reasons.join(' ');}
-  pending=target.filter(f=>records.get(f.id).status==='needs_review');emit('reviewed',round?'修正与复核完成':'首轮校核完成');
+  pending=target.filter(f=>records.get(f.id).status==='needs_review'&&records.get(f.id).route);emit('reviewed',round?'修正与复核完成':'首轮校核完成');
  }
  checkSignal(signal);await assertFresh();
  for(const record of records.values()){
