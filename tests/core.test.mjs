@@ -194,3 +194,28 @@ test('learned experiences retain records and supplement slot counts without trea
  assert.deepEqual(recordTargets(sources),{internship:2});const field={id:'co',label:'公司名称',context:'实习经历 · 第 2 条',supported:true,type:'text'};assert.deepEqual(preferredLearned(field,sources),['learned:c2']);
  assert.equal(validateDeepseekFills({fills:[{fieldId:'co',value:'甲公司',evidence:[{sourceId:'learned:c1',quote:'甲公司'}]}]},[field],sources).fills.length,0);
 });
+
+import {AppError,importDiagnostic} from '../src/diagnostics.js';
+test('import diagnostics distinguish failures and redact file content, paths and raw exceptions',()=>{
+ const context={stage:'decode',file:{name:'private-person.txt',size:321},persisted:false};
+ const encoding=importDiagnostic(new AppError('TXT_ENCODING','SENSITIVE-CONTENT'),context,{version:'test',platform:'Windows'});assert.equal(encoding.code,'TXT_ENCODING');assert.match(encoding.message,/UTF-8/);assert.match(encoding.message,/未替换原有素材/);assert(!JSON.stringify(encoding).includes('SENSITIVE'));assert(!JSON.stringify(encoding.report).includes('private-person'));
+ const read=importDiagnostic(new DOMException('secret','NotReadableError'),{...context,stage:'read'});assert.equal(read.code,'FILE_READ');assert.match(read.message,/OneDrive/);
+ const quota=importDiagnostic(new DOMException('secret','QuotaExceededError'),{...context,stage:'store'});assert.equal(quota.code,'STORE_QUOTA');
+ const preview=importDiagnostic(new TypeError('secret'),{...context,stage:'profile',persisted:true,textReady:true});assert.match(preview.message,/原文件和文本已保存/);assert(!preview.message.includes('文本提取尚未完成'));
+});
+test('unsupported TXT encoding, disguised formats, empty text and binary bytes have actionable codes',()=>{
+ const rejects=(bytes,code)=>assert.throws(()=>decodeText(bytes),e=>e.code===code);
+ rejects(new Uint8Array(),'TXT_EMPTY');rejects(new TextEncoder().encode('  \r\n'),'TXT_EMPTY');rejects(new Uint8Array([0x81]),'TXT_ENCODING');rejects(new Uint8Array([0,1,2]),'TXT_BINARY');
+ rejects(new TextEncoder().encode('%PDF-1.7'),'TXT_FORMAT');rejects(new TextEncoder().encode('{\\rtf1 hello}'),'TXT_FORMAT');
+});
+
+import {nativeKeyRequest} from '../src/native-keys.js';
+test('PC connection errors distinguish missing host from an unauthorized extension ID',async()=>{
+ const original=globalThis.chrome;
+ try{
+  for(const [message,code]of [['Specified native messaging host not found.','PC_NOT_INSTALLED'],['Access to the specified native messaging host is forbidden.','PC_ORIGIN_DENIED'],['Native host has exited.','PC_HOST_FAILED']]){
+   globalThis.chrome={runtime:{sendNativeMessage:async()=>{throw Error(message)}}};await assert.rejects(()=>nativeKeyRequest({action:'status'}),e=>e.code===code);
+  }
+  globalThis.chrome={runtime:{sendNativeMessage:async()=>({ok:true,value:'PRIVATE-INVALID-KEY'})}};await assert.rejects(()=>nativeKeyRequest({action:'get',provider:'jev'}),e=>e.code==='PC_PROTOCOL_INVALID'&&!e.message.includes('PRIVATE-INVALID'));
+ }finally{globalThis.chrome=original;}
+});

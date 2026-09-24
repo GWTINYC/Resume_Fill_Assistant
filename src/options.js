@@ -1,3 +1,4 @@
+import {AppError,importDiagnostic,diagnosticEnvironment} from './diagnostics.js';
 import {validateLearnedFacts,LEARN_CATEGORIES} from './learned.js';
 import {listMaterials,saveMaterial,deleteMaterial,clearMaterials,getLearnedFacts,setLearnedFacts} from './storage.js';
 import {decodeText} from './text-material.js';
@@ -26,7 +27,7 @@ function validated(raw){
  for(const [key]of BASE_FIELDS)out.base[key]=value(raw.base?.[key]);
  for(const group of ['education','work','custom']){if(raw[group]!==undefined&&!Array.isArray(raw[group]))throw Error('经历格式不正确');if((raw[group]||[]).length>(group==='custom'?40:10))throw Error('经历或自定义项过多');out[group]=(raw[group]||[]).map(row=>{if(!row||typeof row!=='object')throw Error('经历格式不正确');return Object.fromEntries((group==='custom'?[['label'],['value']]:RECORD_FIELDS[group]).map(([key])=>[key,value(row[key])]))});}return out;
 }
-$('json-file').onchange=async event=>{try{const f=event.target.files[0];if(!f)return;if(f.size>1000000)throw Error('资料文件过大');const raw=JSON.parse(await f.text());profile=validated(raw);pendingLearnedImport=raw.learnedFacts?validateLearnedFacts(raw.learnedFacts):null;render();status('资料已导入预览，请核对后点击保存。'+(pendingLearnedImport?'保存时也会替换已学习资料，共 '+pendingLearnedImport.length+' 项。':''));}catch(e){status(e.message,true);}event.target.value='';};
+$('json-file').onchange=async event=>{let stage='检查资料文件';try{const f=event.target.files[0];if(!f)return;if(!f.name.toLowerCase().endsWith('.json'))throw Error('[PROFILE_TYPE] 这个按钮用于导入资料 JSON。TXT / PDF 请使用页面顶部“简历素材”的文件选择框。');if(f.size>1000000)throw Error('[PROFILE_SIZE] 资料 JSON 超过 1 MB，请检查是否选错了文件。');stage='读取资料文件';const text=await f.text();stage='解析 JSON';let raw;try{raw=JSON.parse(text);}catch{throw Error('[PROFILE_JSON] 文件不是有效的资料 JSON。请使用插件导出的 JSON；TXT 素材从顶部导入。');}stage='校验资料格式';const imported=validated(raw),learned=raw.learnedFacts?validateLearnedFacts(raw.learnedFacts):null;profile=imported;pendingLearnedImport=learned;render();status('资料已导入预览，请核对后点击保存。'+(pendingLearnedImport?'保存时也会替换已学习资料，共 '+pendingLearnedImport.length+' 项。':''));}catch(e){status(`资料导入失败（${stage}）：${stage==='读取资料文件'?'[PROFILE_READ] 无法读取文件，请先下载到本机后重新选择。':e.message}`,true);}event.target.value='';};
 async function refreshResume(preferredId=activeId){
  materials=await listMaterials();savedResume=materials.find(x=>x.id===preferredId)||materials.at(-1)||null;activeId=savedResume?.id||'';
  $('saved-pdf').hidden=!savedResume;$('material-select').replaceChildren(...materials.map(m=>new Option(`${m.name}${m.enabled===false?'（不发送）':''}`,m.id)));$('material-select').value=activeId;
@@ -43,31 +44,39 @@ $('replace-material').onclick=()=>$('replace-file').click();
 $('delete-pdf').onclick=async()=>{if(pdfBusy||!savedResume||!confirm('删除选中的本地素材及其提取文本？其他素材、个人资料和备注会保留。'))return;try{await deleteMaterial(activeId);await refreshResume();status('已删除选中的素材，其他资料与备注仍保留。');}catch(e){status(e.message,true);}};
 $('clear').onclick=async()=>{if(pdfBusy||!confirm('清除当前浏览器中保存的个人资料、已学习资料、零散备注和全部 PDF / TXT 素材？各服务的 API key 可在侧栏单独清除。'))return;try{await clearMaterials();await chrome.storage.local.remove(['profile','learnedFacts']);pendingLearnedImport=null;await renderLearned();profile=emptyProfile();render();await refreshResume();status('已清除个人资料、备注和全部素材。');}catch(e){status('清除未完成：'+e.message,true);}};
 async function importMaterial(file,replaceId){
- let task,doc,record,persisted=false,id=replaceId||crypto.randomUUID();
+ let task,doc,record,persisted=false,textReady=false,stage='validate',id=replaceId||crypto.randomUUID();
  const kind=file.name.toLowerCase().endsWith('.txt')?'txt':file.name.toLowerCase().endsWith('.pdf')?'pdf':null;
  try{
-  if(!kind)throw Error('仅支持 PDF 和 TXT 文件。');
-  if(file.size>(kind==='pdf'?20:2)*1024*1024)throw Error(`${kind.toUpperCase()} 超过大小上限。`);
-  if(kind==='pdf'&&!(await file.slice(0,1024).text()).includes('%PDF-'))throw Error('不是可识别的 PDF，未替换原有素材。');
-  const decoded=kind==='txt'?decodeText(new Uint8Array(await file.arrayBuffer())):null;
+  if(!kind)throw new AppError('FILE_TYPE','仅支持 PDF 和 TXT 文件。');
+  if(file.size>(kind==='pdf'?20:2)*1024*1024)throw new AppError('FILE_SIZE',`${kind.toUpperCase()} 超过大小上限。`);
+  stage='read';
+  if(kind==='pdf'&&!(await file.slice(0,1024).text()).includes('%PDF-'))throw new AppError('PDF_FORMAT','不是可识别的 PDF，未替换原有素材。');
+  const bytes=kind==='txt'?new Uint8Array(await file.arrayBuffer()):null;stage='decode';
+  const decoded=bytes?decodeText(bytes):null;
   record={name:file.name,size:file.size,kind,enabled:replaceId?(materials.find(m=>m.id===replaceId)?.enabled!==false):true,savedAt:new Date().toISOString(),blob:new Blob([file],{type:kind==='pdf'?'application/pdf':`text/plain;charset=${decoded.encoding}`}),text:decoded?.text||'',encoding:decoded?.encoding||'',pages:null,parseError:kind==='pdf'?'等待解析':''};
-  await saveMaterial(record,id);persisted=true;await refreshResume(id);
+  stage='store';await saveMaterial(record,id);persisted=true;textReady=kind==='txt';stage='load';await refreshResume(id);
   let text=decoded?.text;
   if(kind==='pdf'){
-    task=getDocument({data:new Uint8Array(await file.arrayBuffer()),isEvalSupported:false,cMapUrl:chrome.runtime.getURL('vendor/cmaps/'),cMapPacked:true,standardFontDataUrl:chrome.runtime.getURL('vendor/standard_fonts/'),wasmUrl:chrome.runtime.getURL('vendor/wasm/'),useSystemFonts:true});
-    task.onPassword=()=>{task.destroy();};doc=await task.promise;if(doc.numPages>40)throw Error('PDF 超过 40 页，仅保存原文件，未提取文本。');
+    stage='read';const pdfBytes=new Uint8Array(await file.arrayBuffer());stage='pdf';
+    task=getDocument({data:pdfBytes,isEvalSupported:false,cMapUrl:chrome.runtime.getURL('vendor/cmaps/'),cMapPacked:true,standardFontDataUrl:chrome.runtime.getURL('vendor/standard_fonts/'),wasmUrl:chrome.runtime.getURL('vendor/wasm/'),useSystemFonts:true});
+    task.onPassword=()=>{task.destroy();};doc=await task.promise;if(doc.numPages>40)throw new AppError('PDF_PAGES','PDF 超过 40 页，仅保存原文件，未提取文本。');
     const pages=[];for(let i=1;i<=doc.numPages;i++){const page=await doc.getPage(i);const content=await page.getTextContent();let previousY,lines='';for(const item of content.items){if(!('str'in item))continue;const y=item.transform?.[5];if(previousY!==undefined&&Math.abs(y-previousY)>3)lines+='\n';lines+=item.str+(item.hasEOL?'\n':' ');previousY=y;}pages.push(lines);}
-    text=pages.join('\n\n').trim();if(!text)throw Error('没有读取到文本层。扫描版 PDF 请先 OCR，或导入 TXT。');
-    record={...record,text,pages:doc.numPages,parseError:''};await saveMaterial(record,id);await refreshResume(id);
+    text=pages.join('\n\n').trim();if(!text)throw new AppError('PDF_EMPTY','没有读取到文本层。扫描版 PDF 请先 OCR，或导入 TXT。');
+    record={...record,text,pages:doc.numPages,parseError:''};stage='storeText';await saveMaterial(record,id);textReady=true;stage='load';await refreshResume(id);
   }
-  $('pdf-details').open=true;profile=read();const basic=basicFromText(text);let added=0;for(const [k,v]of Object.entries(basic))if(!profile.base[k]){profile.base[k]=v;added++;}render();
+  stage='profile';$('pdf-details').open=true;profile=read();const basic=basicFromText(text);let added=0;for(const [k,v]of Object.entries(basic))if(!profile.base[k]){profile.base[k]=v;added++;}render();
   return `${kind==='pdf'?`已本地读取 ${doc.numPages} 页`:'已本地读取 TXT'}：${file.name}。原文件与文本已持久保存，补入 ${added} 项基础信息，请核对后保存个人资料。`;
- }catch(e){const reason=/password|destroy/i.test(e.message)?'加密 PDF 已保留；提取文本请使用未加密版本。':e.message;if(persisted){await saveMaterial({...record,parseError:reason},id);await refreshResume(id);}throw Error(`${file.name}：${persisted?'原文件已保存，文本读取未完成。':''}${reason}`);}finally{if(task)await task.destroy().catch(()=>{});}
+ }catch(e){
+  if(kind==='pdf'&&stage==='pdf'&&/password|destroy/i.test(e.message))e=new AppError('PDF_PASSWORD','PDF 需要密码。');
+  const failure=importDiagnostic(e,{stage,file,persisted,textReady},diagnosticEnvironment());
+  if(persisted&&!textReady&&stage==='pdf')try{await saveMaterial({...record,parseError:failure.message},id);await refreshResume(id);}catch{}
+  const error=new Error(`${file.name}：${failure.message}`);error.diagnostic=failure.report;throw error;
+ }finally{if(task)await task.destroy().catch(()=>{});}
 }
 async function importFiles(event,replace=false){
  const files=Array.from(event.target.files||[]);if(!files.length)return;pdfBusy=true;
  for(const name of ['pdf-file','replace-file','replace-material','delete-pdf','clear','material-select','material-enabled'])$(name).disabled=true;
- const messages=[];let errors=false;try{for(const file of files){status(`正在本地读取 ${file.name}…`);try{messages.push(await importMaterial(file,replace?activeId:undefined));}catch(e){errors=true;messages.push(e.message);}}status(messages.join('\n'),errors);}finally{pdfBusy=false;event.target.value='';for(const name of ['pdf-file','replace-file','replace-material','delete-pdf','clear','material-select','material-enabled'])$(name).disabled=false;}
+ const messages=[],reports=[];$('import-diagnostic').hidden=true;let errors=false;try{for(const file of files){status(`正在本地读取 ${file.name}…`);try{messages.push(await importMaterial(file,replace?activeId:undefined));}catch(e){errors=true;messages.push(e.message);if(e.diagnostic)reports.push(e.diagnostic);}}status(messages.join('\n'),errors);if(reports.length){$('diagnostic-text').value=JSON.stringify(reports,null,2);$('import-diagnostic').hidden=false;}}finally{pdfBusy=false;event.target.value='';for(const name of ['pdf-file','replace-file','replace-material','delete-pdf','clear','material-select','material-enabled'])$(name).disabled=false;}
 }
 $('pdf-file').onchange=event=>importFiles(event);
 $('replace-file').onchange=event=>importFiles(event,true);
@@ -90,3 +99,5 @@ async function renderLearned(){
  }
 }
 await renderLearned();
+
+$('copy-diagnostic').onclick=async()=>{try{await navigator.clipboard.writeText($('diagnostic-text').value);$('copy-diagnostic').textContent='诊断信息已复制';}catch{$('diagnostic-text').select();status('无法自动复制，已选中诊断信息，请按 Ctrl+C / Command+C。',true);}};

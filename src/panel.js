@@ -1,8 +1,9 @@
+import {pcKeyHint} from './native-keys.js';
 import {captureDraft,LEARN_CATEGORIES,learningProperty,factKey,learnedEntries,preferredLearned,learnedSourceAllowed} from './learned.js';
 import {routeExperienceFields} from './experience-routing.js';
 import {ensureRecordSlots} from './record-slots.js';
 import {runCollaboration} from './collaboration.js';
-import {getApiKey,setApiKey,clearApiKey,getProvider,setProvider,listMaterials,materialsSnapshot,getLearnedFacts} from './storage.js';
+import {getApiKey,setApiKey,clearApiKey,getProvider,setProvider,listMaterials,materialsSnapshot,getLearnedFacts,connectPcKeys} from './storage.js';
 import {profileEntries,localMapping,defaultFieldValue,mappingPayload,optionPayload,acceptedChoice} from './core.js';
 import {applicantSources,DEEPSEEK_MODEL} from './deepseek.js';
 const $=id=>document.getElementById(id);
@@ -10,13 +11,22 @@ let experienceCategories=[],recordSections=[],entries=[],fields=[],plan=new Map(
 let learnedFacts=[],learnedSnapshot='',learningDraft=[];
 const usage={jev:0,deepseekInput:0,deepseekOutput:0};
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
-function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea'))el.disabled=value||el.dataset.unsupported==='true';}
+function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite','connect-pc-keys'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea'))el.disabled=value||el.dataset.unsupported==='true';}
 async function message(data){const r=await chrome.runtime.sendMessage(data);if(!r?.ok)throw Error(r?.error||'扩展未响应，请重新加载');return r;}
 async function profile(host){
  const {profile}=await chrome.storage.local.get('profile');savedProfile=profile||{};entries=profileEntries(savedProfile);profileSnapshot=JSON.stringify(savedProfile);materials=await listMaterials();materialSnapshot=materialsSnapshot(materials);learnedFacts=await getLearnedFacts();learnedSnapshot=JSON.stringify(learnedFacts);entries.push(...learnedEntries(learnedFacts,host));
  $('profile-info').textContent=`已保存 ${entries.length} 项资料、${materials.length} 份素材、${learnedFacts.length} 项学习资料${savedProfile.notes?'，含补充备注':''} · PDF / TXT 在本机保留`;
 }
-async function keyStatus(){const [jev,deepseek]=await Promise.all([getApiKey('jev'),getApiKey('deepseek')]);$('key-info').textContent=(provider==='jev'?jev:deepseek)?'已持久保存':'未设置';$('team-keys').textContent=`DeepSeek：${deepseek?'已配置':'未配置'} · Jev：${jev?'已配置':'未配置'}。配置好两套密钥后可一键启动。`;}
+async function keyStatus(){
+ const [jev,deepseek]=await Promise.all([getApiKey('jev'),getApiKey('deepseek')]);
+ const states=await chrome.storage.local.get(['pcKeyStatus_jev','pcKeyStatus_deepseek','pcPending_jev','pcPending_deepseek']);
+ const pc=p=>states['pcKeyStatus_'+p]?.connected&&!states['pcPending_'+p];
+ $('key-info').textContent=(provider==='jev'?jev:deepseek)?`已持久保存（${pc(provider)?'PC 文件':'仅浏览器'}）`:'未设置';
+ $('team-keys').textContent=`DeepSeek：${deepseek?'已配置':'未配置'} · Jev：${jev?'已配置':'未配置'}。配置好两套密钥后可一键启动。`;
+ const failed=['jev','deepseek'].find(p=>!pc(p));
+ $('pc-key-status').textContent=failed?`Jev：${pc('jev')?'PC 已连接':'仅浏览器'} · DeepSeek：${pc('deepseek')?'PC 已连接':'仅浏览器'}。`+pcKeyHint(states['pcKeyStatus_'+failed]?.code||'PC_NOT_INSTALLED')+' 未写入 PC 文件的密钥会随扩展卸载而删除。':'PC 文件已连接：已保存的两套密钥可在重装后读取。';
+ $('extension-id').value=chrome.runtime.id;return {pc:pc(provider)};
+}
 function providerUI(){
  $('provider').value=provider;$('match').textContent=provider==='deepseek'?'DeepSeek 智能填写':'Jev 智能匹配';$('provider-model').textContent=provider==='deepseek'?`官方接口 · ${DEEPSEEK_MODEL} · 密钥与 Jev 分开保存`:'官方接口 · jev-1.13.0 · 密钥与 DeepSeek 分开保存';
  $('data-notice').textContent=provider==='deepseek'?'点击 DeepSeek 智能填写，会将网页字段、已保存的个人资料、补充备注和启用素材的文本发送给 DeepSeek，按栏目语义匹配素材原文，提供带出处的填写建议。原始 PDF / TXT 文件不上传。':'扫描和精确名称匹配在本地进行。点击 Jev 智能匹配会发送字段名称、选项及资料项目名称；选项匹配会额外发送相关单项值。素材全文与备注不发送给 Jev。';
@@ -75,8 +85,9 @@ $('save-learning').onclick=async()=>{lock(true);try{
 }catch(e){status(e.message,true);}finally{lock(false);updateCount();}};
 
 $('provider').onchange=async()=>{provider=$('provider').value;await setProvider(provider);$('api-key').value='';providerUI();await keyStatus();};
-$('save-key').onclick=async()=>{const key=$('api-key').value.trim();if(!key||/\s/.test(key)||(provider==='jev'&&!key.startsWith('apikey_'))||(provider==='deepseek'&&!key.startsWith('sk-'))){status(`请输入完整的 ${provider==='deepseek'?'DeepSeek（sk- 开头）':'Jev'} 官方 API key。`,true);return;}await setApiKey(key,provider);$('api-key').value='';await keyStatus();status('当前服务的密钥已保存到本机，重启浏览器后仍可使用。');};
-$('clear-key').onclick=async()=>{await clearApiKey(provider);$('api-key').value='';await keyStatus();status('已清除当前服务的密钥，另一服务的密钥保持不变。');};
+$('save-key').onclick=async()=>{lock(true);try{const key=$('api-key').value.trim();if(!key||/\s/.test(key)||(provider==='jev'&&!key.startsWith('apikey_'))||(provider==='deepseek'&&!key.startsWith('sk-')))throw Error(`请输入完整的 ${provider==='deepseek'?'DeepSeek（sk- 开头）':'Jev'} 官方 API key。`);const result=await setApiKey(key,provider);$('api-key').value='';const current=await keyStatus();status(current.pc?'当前服务的密钥已保存到 PC 文件和浏览器本机副本，卸载插件不会删除 PC 文件。':'密钥已保存到本机浏览器，但尚未写入 PC 文件。'+(result.reason||'请检查 PC 文件连接状态。'),!current.pc);}catch(e){status(e.message,true);}finally{lock(false);updateCount();}};
+$('clear-key').onclick=async()=>{lock(true);try{await clearApiKey(provider);$('api-key').value='';await keyStatus();status('已清除当前服务的密钥，另一服务的密钥保持不变。');}catch(e){await keyStatus();status('清除未完成：'+e.message,true);}finally{lock(false);updateCount();}};
+$('connect-pc-keys').onclick=async()=>{lock(true);try{await connectPcKeys();await keyStatus();status('PC 密钥文件已连接。已迁移浏览器中尚未备份的密钥，或恢复 PC 中已有的密钥。');}catch(e){await keyStatus();status(e.message,true);}finally{lock(false);updateCount();}};
 async function scanCurrent(resetOverwrite=true){
  const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!tab?.id||!/^https?:/.test(tab.url||''))throw Error('请打开普通 http/https 网申页面并点击扩展图标；浏览器设置页、PDF 预览和扩展页无法扫描。');
  await profile(new URL(tab.url).hostname);

@@ -1,8 +1,28 @@
-# Resume Fill Assistant · Jev Apply（0.7.0 原型）
+# Resume Fill Assistant · Jev Apply（0.8.0 原型）
 
 Chrome / Edge 浏览器扩展：在本机保存简历与个人资料，用 **DeepSeek 或 Jev** 识别网申字段，支持一键协作校核后自动填入，也保留单模型预览与手动填写。
 
 [下载最新版插件](https://github.com/GWTINYC/Resume_Fill_Assistant/releases/latest/download/jev-apply-extension.zip) · [版本发布记录](https://github.com/GWTINYC/Resume_Fill_Assistant/releases)
+
+## 0.8：失败诊断与卸载后仍保留的 PC 密钥文件
+
+TXT / PDF 导入失败现在显示 **错误码、失败环节、处理办法、原文件/文本是否已保存**，并提供可复制的诊断信息。诊断不含密钥、素材正文、文件名或完整路径。覆盖文件类型/大小、空文件、编码、二进制/伪装格式、文件读取失败、本地数据库占用/超时、空间不足、权限错误、PDF 解析、界面后续处理失败。把 TXT 误选到“导入资料 JSON”时会明确提示正确入口；界面模块未加载或未捕获错误也不再无声失败。
+
+### 将两套 API key 保存到用户主目录
+
+下载 [本地连接程序](https://github.com/GWTINYC/Resume_Fill_Assistant/releases/latest/download/jev-apply-local-keys.zip)，解压并按附带 README 安装一次：
+
+1. 更新插件，在侧栏展开“PC 文件保存”，复制当前扩展 ID。
+2. Windows 双击 `install-windows.bat`，粘贴 ID；Mac 运行 `install-macos.command`，粘贴 ID。无需管理员权限或备份密码。Windows 使用 .NET Framework 编译器（通常随系统提供），Mac 需要 Python 3。
+3. 返回侧栏点击“连接 / 迁移到 PC 文件”，确认显示“PC 文件已连接”。以后保存密钥会同时写入 PC 文件与浏览器副本；PC 文件已有密钥时会自动读取。
+
+文件位置：Mac `~/.resume-fill-assistant/api-keys.json`；Windows `%USERPROFILE%\.resume-fill-assistant\api-keys.json`。按用户要求明文保存，不设密码；目录和文件权限限制为当前用户（Windows 另保留 SYSTEM）。文件独立于扩展：更新、卸载扩展都不会删除它。重装后扩展 ID 仍已授权即可读回；换浏览器或扩展目录导致 ID 变化时，重跑安装脚本添加新 ID，已有密钥保留。同一电脑同一系统账户的 Chrome / Edge 可共用此文件；不同电脑不会自动同步。
+
+未安装或无法连接时仍可使用浏览器副本，但界面明确显示“仅浏览器”，不能当作卸载后的备份。文件损坏不自动覆盖；写入失败会保留浏览器副本并提示，连接恢复后同步待保存值。“清除密钥”同时清除当前服务的 PC 文件项与浏览器副本，保留另一服务；已连接过的 PC 程序不可用时不会谎报清除成功。安装器不删除或重写 API key 文件。
+
+新增 `nativeMessaging` 权限，仅连接本地程序；程序只接受已登记的扩展 ID，只能操作固定密钥文件，不接受任意文件路径，不联网、不常驻。资料 JSON 不包含密钥，简历/学习资料仍使用原本的浏览器存储及导出功能。
+
+验证：42 项核心测试通过；故障注入覆盖编码、文件读取、空间不足、JSON 入口错误、保留旧素材与重试。Mac 完成本地程序真实协议测试、并发写入、600/700 权限检查，以及真实 Chromium native messaging 的浏览器副本迁移、全新浏览器配置恢复、单服务清除、损坏文件保护及断连状态测试。Windows C# 程序已用 C# 5 / .NET Framework 4.8 引用程序集编译检查，尚未在 Windows 实机运行；可在 Windows 用 `python tests/native-host.test.py` 运行原生协议测试。测试均使用虚构密钥，不访问用户真实密钥文件。
 
 ## 0.7：学习手动填好的页面
 
@@ -91,7 +111,7 @@ PDF / TXT 多素材、本地持久保存、两套密钥隔离及原有 Jev / Dee
 3. 打开“开发者模式”，点击“加载已解压的扩展程序”。
 4. 选择包含 `manifest.json` 的 `jev-apply` 文件夹，在工具栏固定扩展图标。
 
-更新时覆盖原来的扩展文件夹，在扩展管理页点击“重新加载”，保持原路径和扩展身份。不要通过卸载重装来更新：卸载扩展、清除浏览器配置或改变扩展身份可能导致本地数据丢失。Chrome 和 Edge 各自保存资料，不做跨浏览器同步。
+更新时覆盖原来的扩展文件夹，在扩展管理页点击“重新加载”，保持原路径和扩展身份。不要通过卸载重装来更新：卸载扩展、清除浏览器配置或改变扩展身份可能导致本地数据丢失。Chrome 和 Edge 各自保存资料；0.8 的 PC 密钥文件可以由同一系统账户的两个浏览器共用。
 
 ## 使用
 
@@ -122,7 +142,7 @@ DeepSeek 的输出不是任意浏览器脚本。插件只允许填写扫描到�
 - 可同时保留 PDF 与 TXT。添加文件不会覆盖旧素材；需要更新时使用“替换这份素材”。
 - 在素材列表选择一项后，可查看文本、查看原文件、下载原件或删除。下载保留原文件字节和文件名。
 - 每份素材可勾选是否在智能填写或双 AI 协作中使用。关闭仅影响模型请求，不删除本地文件。
-- 素材保存在本地 IndexedDB；个人资料、备注、服务选择及 API key 保存在扩展本地存储。
+- 素材保存在本地 IndexedDB；个人资料、备注、服务选择和密钥副本保存在扩展本地存储。连接本地程序后，两套 API key 另存到用户主目录的独立文件。
 - 资料与备注可导出/导入 JSON。密钥不包含在资料 JSON 中，素材原文件通过下载功能单独备份。
 - 结构化个人资料优先于素材中冲突的信息；无法确定时提示模型跳过。
 - 单次 DeepSeek 请求使用的资料文本上限为 100,000 字符，过长时明确报错，请取消部分素材或缩短资料；不会静默截断。
@@ -144,7 +164,7 @@ DeepSeek 的输出不是任意浏览器脚本。插件只允许填写扫描到�
 - `POST https://api.typesafe.ai/v1/systemone`
 - `POST https://api.deepseek.com/chat/completions`
 
-权限为 activeTab、scripting、storage、sidePanel，加上述两个 API 域名；没有全站常驻读取权限。模型密钥只能由可信扩展上下文读取。
+权限为 activeTab、scripting、storage、sidePanel、nativeMessaging，加上述两个 API 域名；没有全站常驻读取权限。模型密钥只能由可信扩展上下文读取。
 
 ## 支持的网页操作
 
@@ -191,6 +211,10 @@ npm run test:recruiting
 npm run test:record-slots
 npm run test:moka
 npm run test:learning
+npm run test:import-errors
+npm run test:native-host
+# macOS 真实 Native Messaging 集成测试
+npm run test:native-keys
 npm run lab
 ```
 

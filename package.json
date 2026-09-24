@@ -1,6 +1,6 @@
 {
   "name": "jev-apply",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,7 +13,10 @@
     "lab": "node tools/recruiting-lab.mjs",
     "test:record-slots": "node tests/record-slots.browser.mjs",
     "test:moka": "node tests/moka.browser.mjs",
-    "test:learning": "node tests/learning.browser.mjs"
+    "test:learning": "node tests/learning.browser.mjs",
+    "test:import-errors": "node tests/import-errors.browser.mjs",
+    "test:native-host": "python3 tests/native-host.test.py",
+    "test:native-keys": "node tests/native-keys.browser.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "^6.3.289"

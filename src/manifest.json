@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Jev Apply · 网申助手",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "本地保存 PDF / TXT 与个人资料，DeepSeek 匹配栏目原文，Jev 校核后自动填入。支持 Chrome 与 Edge。",
   "minimum_chrome_version": "140",
   "permissions": [
     "activeTab",
     "scripting",
     "storage",
-    "sidePanel"
+    "sidePanel",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://api.typesafe.ai/*",
