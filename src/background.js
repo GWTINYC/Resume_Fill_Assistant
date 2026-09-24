@@ -13,7 +13,8 @@ async function handle(message){
     catch{results=await inject(message.tabId,{action:'scan',token},[0]);limited=true;}
     const fields=results.flatMap(r=>(r.result?.fields||[]).map(f=>({...f,localId:f.id,id:`${r.frameId}:${f.id}`,frameId:r.frameId})));
     const sections=results.flatMap(r=>(r.result?.sections||[]).map(s=>({...s,localId:s.id,id:`${r.frameId}:${s.id}`,frameId:r.frameId})));
-    return {token,fields,sections,pageContext:results.find(r=>r.frameId===0)?.result?.pageContext||{},limited,atLimit:results.some(r=>r.result?.atLimit),frameCount:results.length};
+    const experienceCategories=[...new Set(results.flatMap(r=>r.result?.experienceCategories||[]))];
+    return {token,fields,sections,experienceCategories,pageContext:results.find(r=>r.frameId===0)?.result?.pageContext||{},limited,atLimit:results.some(r=>r.result?.atLimit),frameCount:results.length};
   }
   if(message.action==='add-record'){
     if(!Number.isInteger(message.frameId)||typeof message.sectionId!=='string')throw Error('无效的经历章节');

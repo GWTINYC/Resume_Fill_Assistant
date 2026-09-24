@@ -90,7 +90,7 @@ test('reviewer approval cannot override the local no-rewriting rule',async()=>{
  assert.equal(writes,0);assert.equal(result[0].status,'needs_review');assert.match(result[0].reason,/连续原文/);
 });
 
-import {materialIndex,recordEvidenceMatches} from '../src/material-index.js';
+import {materialIndex,recordEvidenceMatches,fieldRecord} from '../src/material-index.js';
 test('indexed passages copy original whitespace without model reproduction',()=>{
  const sources=[{id:'cv',label:'素材',text:'个人能力：\n\n1. 熟悉 React。\n\n2. 能够协作。\u00a0   \n'}];const index=materialIndex(sources);const passage=index.passages.find(p=>p.kind==='block'&&p.category==='skills');
  const field={id:'skills',label:'个人技能',type:'textarea',supported:true};const result=validateDeepseekFills({fills:[{fieldId:'skills',passageId:passage.id}]},[field],sources);
@@ -139,4 +139,30 @@ test('record expansion stops on cancellation, ambiguity or failed growth',async(
  await assert.rejects(ensureRecordSlots({...deps,sections:[section,{...section,id:'s1'}]}),/多个章节/);assert.equal(clicks,1);
  await assert.rejects(ensureRecordSlots({...deps,assertFresh:async()=>{throw Error('已停止')}}),/已停止/);assert.equal(clicks,1);
  await assert.rejects(ensureRecordSlots({...deps,add:async()=>({ok:true})}),/数量不符合/);
+});
+
+import {experiencePolicy,routeExperienceFields} from '../src/experience-routing.js';
+test('internships prefer their own page section and only fall back when it is absent',()=>{
+ const sources=[{id:'cv',text:'实习经历：\n公司：甲公司\n公司：乙公司'}];const work={id:'w2',label:'公司',context:'工作经历 · 第 2 条',supported:true,type:'text'};const intern={id:'i',label:'公司',context:'实习经历 · 第 1 条',supported:true,type:'text'};
+ const both=routeExperienceFields([work,intern],sources);assert.equal(both[0].supported,false);assert.equal(both[1].supported,true);
+ const fallback=routeExperienceFields([work],sources)[0];assert.equal(fallback.experienceRoute,'internship-in-work');assert.deepEqual(fallback.sourceRecord,{category:'internship',record:2});
+ const idx=materialIndex(sources),passage=idx.passages.find(p=>p.text==='乙公司');assert.equal(validateDeepseekFills({fills:[{fieldId:'w2',passageId:passage.id}]},[fallback],sources).fills[0].value,'乙公司');
+ const wrong=idx.passages.find(p=>p.text==='甲公司');assert.equal(validateDeepseekFills({fills:[{fieldId:'w2',passageId:wrong.id}]},[fallback],sources).fills.length,0);
+ assert.equal(routeExperienceFields([work],sources,[],['internship'])[0].supported,false);
+ const mixed=[...sources,{id:'work',text:'工作经历：\n公司：正式单位'}];assert.equal(experiencePolicy(mixed,[],[work]).fallback,false);
+});
+test('fallback slot expansion adds work slots for internship records and preserves original category',async()=>{
+ const sources=[{id:'cv',text:'实习经历：\n公司：甲公司\n公司：乙公司'}];let section={id:'s',category:'work',title:'工作经历',count:1,canAdd:true},calls=0;
+ const result=await ensureRecordSlots({sources,sections:[section],assertFresh:async()=>{},add:async(s,target)=>{assert.equal(s.category,'work');assert.equal(target,2);calls++;section={...section,count:2};return {ok:true};},rescan:async()=>[section]});assert.equal(result.added,1);assert.equal(calls,1);assert.equal(materialIndex(sources).records[0].category,'internship');
+});
+
+test('Moka date components keep start/end and record identity, without inventing precision',()=>{
+ const sources=[{id:'cv',label:'素材',text:'教育背景\n硕士：示例大学\n2024.09-2027.06\n本科：另一大学\n2020.09-2024.06'}];
+ const fields=['start','end'].flatMap(boundary=>['year','month'].map(unit=>({id:boundary+unit,label:'就读时间',context:'教育背景 · 第 1 条',type:'custom-select',datePart:{boundary,unit},supported:true,options:['2020','2024','2027','9','09','6'].map(value=>({value,label:value}))})));
+ const fill=(id,value,quote='2024.09-2027.06')=>({fieldId:id,value,evidence:[{sourceId:'cv',quote}]});
+ const run=(id,value,quote)=>validateDeepseekFills({fills:[fill(id,value,quote)]},fields,sources).fills.length;
+ assert.equal(run('startyear','2024'),1);assert.equal(run('startmonth','9'),1);assert.equal(run('startmonth','09'),1);assert.equal(run('endyear','2027'),1);assert.equal(run('endmonth','6'),1);
+ assert.equal(run('startyear','2027'),0);assert.equal(run('endmonth','9'),0);assert.equal(run('startyear','2020','2020.09-2024.06'),0);
+ assert.equal(run('startyear','2027','2027.06'),0);assert.equal(run('endyear','2027','2027.06'),1);
+ assert.deepEqual(fieldRecord({context:'项目经验 · 第 2 条'}),{category:'project',record:2});
 });

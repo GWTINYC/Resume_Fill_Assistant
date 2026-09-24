@@ -1,10 +1,11 @@
+import {routeExperienceFields} from './experience-routing.js';
 import {ensureRecordSlots} from './record-slots.js';
 import {runCollaboration} from './collaboration.js';
 import {getApiKey,setApiKey,clearApiKey,getProvider,setProvider,listMaterials,materialsSnapshot} from './storage.js';
 import {profileEntries,localMapping,defaultFieldValue,mappingPayload,optionPayload,acceptedChoice} from './core.js';
 import {applicantSources,DEEPSEEK_MODEL} from './deepseek.js';
 const $=id=>document.getElementById(id);
-let recordSections=[],entries=[],fields=[],plan=new Map(),tabId,token,profileSnapshot='',materialSnapshot='',savedProfile={},materials=[],provider='jev',busy=false,pageContext={},collaborationController=null;
+let experienceCategories=[],recordSections=[],entries=[],fields=[],plan=new Map(),tabId,token,profileSnapshot='',materialSnapshot='',savedProfile={},materials=[],provider='jev',busy=false,pageContext={},collaborationController=null;
 const usage={jev:0,deepseekInput:0,deepseekOutput:0};
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
 function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill'])$(id).disabled=value||(id!=='scan'&&!fields.length);for(const id of ['provider','save-key','clear-key','overwrite'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea'))el.disabled=value||el.dataset.unsupported==='true';}
@@ -50,7 +51,7 @@ $('save-key').onclick=async()=>{const key=$('api-key').value.trim();if(!key||/\s
 $('clear-key').onclick=async()=>{await clearApiKey(provider);$('api-key').value='';await keyStatus();status('已清除当前服务的密钥，另一服务的密钥保持不变。');};
 async function scanCurrent(resetOverwrite=true){
  await profile();const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!tab?.id||!/^https?:/.test(tab.url||''))throw Error('请打开普通 http/https 网申页面并点击扩展图标；浏览器设置页、PDF 预览和扩展页无法扫描。');
- const r=await message({action:'scan',tabId:tab.id});tabId=tab.id;token=r.token;fields=r.fields;recordSections=r.sections||[];pageContext=r.pageContext||{};plan.clear();if(resetOverwrite)$('overwrite').checked=false;
+ const r=await message({action:'scan',tabId:tab.id});tabId=tab.id;token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();if(resetOverwrite)$('overwrite').checked=false;
  for(const f of fields)setEntry(f,localMapping(f,entries)||'','本地名称匹配');
  $('page-info').textContent=`${new URL(tab.url).hostname} · ${fields.length} 个可见字段 · ${r.frameCount} 个可访问框架`;
  status(fields.length?`扫描完成。可一键协作填写，也可使用单模型或手动操作。${r.atLimit?' 单个框架最多扫描 100 项，请分步处理。':''}${r.limited?' 部分框架不可访问。':''}`:'没有找到可见表单。自定义控件、跨域框架或 Shadow DOM 可能需要网站专用适配。');render();
@@ -111,9 +112,9 @@ $('collaborate').onclick=async()=>{
   await scanCurrent(false);const sources=applicantSources(entries,savedProfile,materials);if(!sources.length)throw Error('请先导入素材或保存个人资料，再启动协作。');
   const overwrite=$('overwrite').checked;
   const assertFresh=async()=>{if(controller.signal.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==tabId)throw Error('当前标签页已切换，已停止协作填写。');const {profile}=await chrome.storage.local.get('profile');if(JSON.stringify(profile||{})!==profileSnapshot||materialsSnapshot(await listMaterials())!==materialSnapshot)throw Error('个人资料或素材已变化，请重新启动协作。');};
-  const prepared=await ensureRecordSlots({sources,sections:recordSections,assertFresh,onProgress:text=>status(text),
+  const prepared=await ensureRecordSlots({sources,sections:recordSections,fields,knownCategories:experienceCategories,assertFresh,onProgress:text=>status(text),
     add:(section,target)=>message({action:'add-record',tabId,token,frameId:section.frameId,sectionId:section.localId,target}),
-    rescan:async()=>{const r=await message({action:'scan',tabId});token=r.token;fields=r.fields;recordSections=r.sections||[];pageContext=r.pageContext||{};plan.clear();for(const f of fields)setEntry(f,localMapping(f,entries)||'','新增后重新扫描');render();return recordSections;}
+    rescan:async()=>{const r=await message({action:'scan',tabId});token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();for(const f of fields)setEntry(f,localMapping(f,entries)||'','新增后重新扫描');render();return recordSections;}
   });
   const result=await runCollaboration({fields,sources,entries,pageContext,overwrite,signal:controller.signal,assertFresh,onProgress:showCollaboration,
     draft:async(batch,workflow)=>{const r=await message({action:'deepseek-fill',fields:batch,sources,workflow});usage.deepseekInput+=r.usage?.prompt_tokens||0;usage.deepseekOutput+=r.usage?.completion_tokens||0;return r;},

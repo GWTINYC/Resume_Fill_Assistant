@@ -1,8 +1,9 @@
 // Deterministic references into the original text. No generated answer text is stored here.
-const titles=new Map([['教育背景','education'],['教育经历','education'],['实习经历','internship'],['工作经历','work'],['个人项目经历','project'],['项目经历','project'],['课题项目经验','project'],['个人能力','skills'],['个人技能','skills'],['专业技能','skills'],['自我评价','skills'],['自我介绍','intro'],['在校实践','practice'],['校园经历','practice'],['获奖情况','awards'],['获奖经历','awards'],['论文/专著','publications']]);
+const titles=new Map([['教育背景','education'],['教育经历','education'],['实习经历','internship'],['工作经历','work'],['个人项目经历','project'],['项目经验','project'],['项目经历','project'],['课题项目经验','project'],['个人能力','skills'],['个人技能','skills'],['专业技能','skills'],['自我评价','skills'],['自我介绍','intro'],['在校实践','practice'],['校园经历','practice'],['获奖情况','awards'],['获奖经历','awards'],['论文/专著','publications']]);
 export function fieldRecord(field){
- const context=field.context||'';const record=Number(context.match(/第\s*(\d+)\s*条/)?.[1]);
- const category=/^教育经历/.test(context)?'education':/^实习经历/.test(context)?'internship':/^工作经历/.test(context)?'work':/^课题项目经验|^项目经历/.test(context)?'project':/^在校实践/.test(context)?'practice':/^获奖情况/.test(context)?'awards':/^论文\/专著/.test(context)?'publications':null;
+ if(field.sourceRecord&&['education','internship','work','project','practice','awards','publications'].includes(field.sourceRecord.category)&&Number.isInteger(field.sourceRecord.record)&&field.sourceRecord.record>0)return field.sourceRecord;
+ const context=field.context||'';const record=Number(context.match(/第\s*(\d+)\s*条/)?.[1]||context.match(/(?:经历|经验)\s*(\d+)/)?.[1]||(/^(教育背景|(?:教育|实习|工作|项目)(?:经历|经验))$/.test(context.trim())?'1':''));
+ const category=/^教育(?:经历|背景)/.test(context)?'education':/^实习(?:经历|经验)/.test(context)?'internship':/^工作(?:经历|经验)|^工作[／/和及、]实习经历/.test(context)?'work':/^课题项目经验|^项目(?:经历|经验)/.test(context)?'project':/^在校实践/.test(context)?'practice':/^获奖情况/.test(context)?'awards':/^论文\/专著/.test(context)?'publications':null;
  return category&&record?{category,record}:null;
 }
 export function materialIndex(sources){

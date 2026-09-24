@@ -1,3 +1,4 @@
+import {experiencePolicy} from './experience-routing.js';
 import {materialIndex} from './material-index.js';
 export function recordTargets(sources){
  const records=materialIndex(sources).records,targets={};
@@ -11,8 +12,10 @@ export function recordTargets(sources){
  }
  return targets;
 }
-export async function ensureRecordSlots({sources,sections,add,rescan,assertFresh,onProgress=()=>{}}){
- const targets=recordTargets(sources);let current=sections,clicks=0;
+export async function ensureRecordSlots({sources,sections,fields=[],knownCategories=[],add,rescan,assertFresh,onProgress=()=>{}}){
+ const targets=recordTargets(sources);const policy=experiencePolicy(sources,sections,fields,knownCategories);
+ if(policy.fallback){targets.work=targets.internship;delete targets.internship;}
+ let current=sections,clicks=0;
  for(const [category,target]of Object.entries(targets)){
   for(;;){
    await assertFresh();const matches=current.filter(s=>s.category===category);if(!matches.length)break;
