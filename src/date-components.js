@@ -7,6 +7,8 @@ export function dateComponentMatches(field,value,evidence,sources){
  const represented=String(option.label||value).match(/^\s*(\d{1,4})\s*[年月]?\s*$/);if(!represented)return false;
  const expected=fieldRecord(field),index=sources&&materialIndex(sources);
  return evidence.some(e=>{
+  const confirmed=sources?.find(s=>s.id===e.sourceId);
+  if(confirmed?.learned?.datePart&&confirmed.learned.datePart.unit===part.unit&&confirmed.learned.datePart.boundary===part.boundary&&e.quote===confirmed.text)return Number(confirmed.text.replace(/[年月]/g,''))===Number(represented[1]);
   let text=e.quote;
   if(sources){
    const source=sources.find(s=>s.id===e.sourceId);if(!source)return false;
@@ -21,7 +23,7 @@ export function dateComponentMatches(field,value,evidence,sources){
    if(part.boundary!=='single'&&sources){
     const source=sources.find(s=>s.id===e.sourceId);
     const explicit=part.boundary==='start'?/开始|入学|入职|start/i:/结束|毕业|离职|end/i;
-    const structured=source?.id.endsWith(part.boundary==='start'?'.start':'.end');
+    const structured=source?.id.endsWith(part.boundary==='start'?'.start':'.end')||source?.learned?.property===part.boundary;
     if(!structured&&!explicit.test(text))return false;
    }
    selected=found[0];

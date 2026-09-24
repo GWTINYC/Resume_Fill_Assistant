@@ -1,3 +1,4 @@
+import {validateLearnedFacts} from './learned.js';
 // Local persistence only. No cloud sync or remote backup.
 const providerKey=provider=>{if(!['jev','deepseek'].includes(provider))throw Error('未知模型服务');return provider==='jev'?'apiKey':'deepseekApiKey';};
 export async function getApiKey(provider='jev') {
@@ -56,3 +57,6 @@ export async function listMaterials(){
   });
 }
 export const materialsSnapshot=items=>JSON.stringify(items.map(({id,name,text,savedAt,enabled})=>({id,name,text,savedAt,enabled})).sort((a,b)=>a.id.localeCompare(b.id)));
+
+export async function getLearnedFacts(){const {learnedFacts=[]}=await chrome.storage.local.get('learnedFacts');return validateLearnedFacts(learnedFacts);}
+export async function setLearnedFacts(facts){await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.storage.local.set({learnedFacts:validateLearnedFacts(facts)});}

@@ -1,9 +1,10 @@
-import {listMaterials,saveMaterial,deleteMaterial,clearMaterials} from './storage.js';
+import {validateLearnedFacts,LEARN_CATEGORIES} from './learned.js';
+import {listMaterials,saveMaterial,deleteMaterial,clearMaterials,getLearnedFacts,setLearnedFacts} from './storage.js';
 import {decodeText} from './text-material.js';
 import {BASE_FIELDS,RECORD_FIELDS,emptyProfile,basicFromText} from './core.js';
 import {getDocument,GlobalWorkerOptions} from 'pdfjs-dist/build/pdf.mjs';
 GlobalWorkerOptions.workerSrc=chrome.runtime.getURL('vendor/pdf.worker.mjs');
-const $=id=>document.getElementById(id);let profile=emptyProfile(),savedResume=null,materials=[],activeId='',pdfBusy=false;
+const $=id=>document.getElementById(id);let pendingLearnedImport=null;let profile=emptyProfile(),savedResume=null,materials=[],activeId='',pdfBusy=false;
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
 function fieldInput(label,key,value,group,index){const wrapper=document.createElement('label');wrapper.textContent=label;const input=document.createElement(key==='description'||key==='value'?'textarea':'input');input.value=value||'';input.dataset.key=key;input.dataset.group=group;if(index!==undefined)input.dataset.index=index;input.autocomplete='off';input.maxLength=10000;wrapper.append(input);return wrapper;}
 function read(){const out=emptyProfile();out.notes=$('notes').value;for(const group of ['education','work','custom'])out[group]=profile[group].map(()=>({}));for(const el of document.querySelectorAll('[data-key]')){const {group,key,index}=el.dataset;const target=group==='base'?out.base:out[group][Number(index)];target[key]=el.value.trim();}return out;}
@@ -15,8 +16,8 @@ function render(){
  }
 }
 for(const group of ['education','work','custom'])$('add-'+group).onclick=()=>{profile=read();if(profile[group].length>=(group==='custom'?40:10)){status('已达到首版支持的记录数量上限。',true);return;}profile[group].push({});render();};
-$('save').onclick=async()=>{profile=read();await chrome.storage.local.set({profile});status('个人资料已保存到当前浏览器。返回侧栏重新扫描即可使用。');};
-$('export').onclick=async()=>{const {profile:saved}=await chrome.storage.local.get('profile');if(!saved){status('请先保存个人资料。',true);return;}const url=URL.createObjectURL(new Blob([JSON.stringify(saved,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='jev-apply-profile.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);status('已导出资料。文件包含个人信息，请自行妥善保存。');};
+$('save').onclick=async()=>{profile=read();await chrome.storage.local.set({profile});if(pendingLearnedImport!==null){await setLearnedFacts(pendingLearnedImport);pendingLearnedImport=null;await renderLearned();}status('个人资料已保存到当前浏览器。返回侧栏重新扫描即可使用。');};
+$('export').onclick=async()=>{const {profile:saved}=await chrome.storage.local.get('profile');const learnedFacts=await getLearnedFacts();if(!saved&&!learnedFacts.length){status('请先保存个人资料。',true);return;}const url=URL.createObjectURL(new Blob([JSON.stringify({...saved||emptyProfile(),learnedFacts},null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='jev-apply-profile.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);status('已导出资料。文件包含个人信息，请自行妥善保存。');};
 $('import').onclick=()=>$('json-file').click();
 function validated(raw){
  if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('资料 JSON 格式不正确');const out=emptyProfile();
@@ -25,7 +26,7 @@ function validated(raw){
  for(const [key]of BASE_FIELDS)out.base[key]=value(raw.base?.[key]);
  for(const group of ['education','work','custom']){if(raw[group]!==undefined&&!Array.isArray(raw[group]))throw Error('经历格式不正确');if((raw[group]||[]).length>(group==='custom'?40:10))throw Error('经历或自定义项过多');out[group]=(raw[group]||[]).map(row=>{if(!row||typeof row!=='object')throw Error('经历格式不正确');return Object.fromEntries((group==='custom'?[['label'],['value']]:RECORD_FIELDS[group]).map(([key])=>[key,value(row[key])]))});}return out;
 }
-$('json-file').onchange=async event=>{try{const f=event.target.files[0];if(!f)return;if(f.size>1000000)throw Error('资料文件过大');profile=validated(JSON.parse(await f.text()));render();status('资料已导入预览，请核对后点击保存。');}catch(e){status(e.message,true);}event.target.value='';};
+$('json-file').onchange=async event=>{try{const f=event.target.files[0];if(!f)return;if(f.size>1000000)throw Error('资料文件过大');const raw=JSON.parse(await f.text());profile=validated(raw);pendingLearnedImport=raw.learnedFacts?validateLearnedFacts(raw.learnedFacts):null;render();status('资料已导入预览，请核对后点击保存。'+(pendingLearnedImport?'保存时也会替换已学习资料，共 '+pendingLearnedImport.length+' 项。':''));}catch(e){status(e.message,true);}event.target.value='';};
 async function refreshResume(preferredId=activeId){
  materials=await listMaterials();savedResume=materials.find(x=>x.id===preferredId)||materials.at(-1)||null;activeId=savedResume?.id||'';
  $('saved-pdf').hidden=!savedResume;$('material-select').replaceChildren(...materials.map(m=>new Option(`${m.name}${m.enabled===false?'（不发送）':''}`,m.id)));$('material-select').value=activeId;
@@ -40,7 +41,7 @@ $('view-pdf').onclick=()=>{try{const url=resumeURL();window.open(url,'_blank','n
 $('download-pdf').onclick=()=>{try{const url=resumeURL();const link=document.createElement('a');link.href=url;link.download=savedResume.name;link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);}catch(e){status(e.message,true);}};
 $('replace-material').onclick=()=>$('replace-file').click();
 $('delete-pdf').onclick=async()=>{if(pdfBusy||!savedResume||!confirm('删除选中的本地素材及其提取文本？其他素材、个人资料和备注会保留。'))return;try{await deleteMaterial(activeId);await refreshResume();status('已删除选中的素材，其他资料与备注仍保留。');}catch(e){status(e.message,true);}};
-$('clear').onclick=async()=>{if(pdfBusy||!confirm('清除当前浏览器中保存的个人资料、零散备注和全部 PDF / TXT 素材？各服务的 API key 可在侧栏单独清除。'))return;try{await clearMaterials();await chrome.storage.local.remove('profile');profile=emptyProfile();render();await refreshResume();status('已清除个人资料、备注和全部素材。');}catch(e){status('清除未完成：'+e.message,true);}};
+$('clear').onclick=async()=>{if(pdfBusy||!confirm('清除当前浏览器中保存的个人资料、已学习资料、零散备注和全部 PDF / TXT 素材？各服务的 API key 可在侧栏单独清除。'))return;try{await clearMaterials();await chrome.storage.local.remove(['profile','learnedFacts']);pendingLearnedImport=null;await renderLearned();profile=emptyProfile();render();await refreshResume();status('已清除个人资料、备注和全部素材。');}catch(e){status('清除未完成：'+e.message,true);}};
 async function importMaterial(file,replaceId){
  let task,doc,record,persisted=false,id=replaceId||crypto.randomUUID();
  const kind=file.name.toLowerCase().endsWith('.txt')?'txt':file.name.toLowerCase().endsWith('.pdf')?'pdf':null;
@@ -72,3 +73,20 @@ $('pdf-file').onchange=event=>importFiles(event);
 $('replace-file').onchange=event=>importFiles(event,true);
 const saved=await chrome.storage.local.get('profile');if(saved.profile){try{profile=validated(saved.profile);}catch{status('已保存资料格式异常，请重新导入。',true);}}render();
 try{await refreshResume();}catch{status('无法读取本地素材，请检查浏览器设置。',true);}
+
+async function renderLearned(){
+ const rows=await getLearnedFacts();$('learned-facts').replaceChildren();
+ if(!rows.length){$('learned-facts').textContent='还没有学习资料。到填好的网申页，在侧栏点击“读取已填页面”。';return;}
+ for(const f of rows){
+  const card=document.createElement('div');card.className='record';card.dataset.learnedId=f.id;
+  const title=document.createElement('h3');title.textContent=`${LEARN_CATEGORIES[f.category]}${f.record?' 第 '+f.record+' 条':''} · ${f.label}`;
+  const meta=document.createElement('p');meta.className='muted';meta.textContent=`来源：${f.host} · ${f.scope==='site'?'仅用于该网站':'可用于其他网站'} · ${f.savedAt?new Date(f.savedAt).toLocaleString():''}`;
+  const value=document.createElement('textarea');value.value=f.value;value.maxLength=10000;value.setAttribute('aria-label','已学习 '+f.label);
+  const enabled=document.createElement('input');enabled.type='checkbox';enabled.checked=f.enabled;const enabledLabel=document.createElement('label');enabledLabel.className='check';enabledLabel.append(enabled,document.createTextNode('用于之后的自动填写'));
+  const save=document.createElement('button');save.textContent='保存这项';save.className='small';const remove=document.createElement('button');remove.textContent='删除这项';remove.className='small danger';
+  const update=async del=>{save.disabled=remove.disabled=true;try{const r=await chrome.runtime.sendMessage({action:'edit-learning',id:f.id,remove:del,value:value.value,enabled:enabled.checked});if(!r?.ok)throw Error(r?.error||'保存失败');await renderLearned();status(del?'已删除该学习资料，原有简历素材保留。':'已更新该学习资料。');}catch(e){status(e.message,true);save.disabled=remove.disabled=false;}};
+  save.onclick=()=>update(false);remove.onclick=()=>{if(confirm('删除这项已学习资料？原有简历素材和其他资料保留。'))update(true);};
+  card.append(title,meta,value,enabledLabel,save,remove);$('learned-facts').append(card);
+ }
+}
+await renderLearned();

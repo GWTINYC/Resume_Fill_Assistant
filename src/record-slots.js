@@ -3,12 +3,12 @@ import {materialIndex} from './material-index.js';
 export function recordTargets(sources){
  const records=materialIndex(sources).records,targets={};
  for(const category of ['education','internship','work','project']){
-  const rows=records.filter(r=>r.category===category);if(!rows.length)continue;
+  const learned=records.filter(r=>r.category===category&&r.learned);const rows=records.filter(r=>r.category===category&&!r.learned);if(!rows.length){const ids=[...new Set(learned.map(r=>r.record))].sort((a,b)=>a-b);if(ids.length&&ids.every((n,i)=>n===i+1))targets[category]=ids.length;continue;}
   const structured=rows.filter(r=>/^(education|work)\./.test(r.sourceId));
   const groups=new Map();for(const r of structured.length?structured:rows){const id=structured.length?'profile':r.sourceId;if(!groups.has(id))groups.set(id,new Set());groups.get(id).add(r.record);}
   const counts=[...groups.values()].map(ids=>{const sorted=[...ids].sort((a,b)=>a-b);if(sorted.some((n,i)=>n!==i+1))throw Error('素材经历序号不连续，请先核对资料。');return ids.size;});
   if(new Set(counts).size!==1)throw Error('多份启用素材的经历数量不一致，请先选择当前要填写的素材。');
-  if(counts[0]>10)throw Error('单类经历超过 10 条，请手动准备栏位后分段填写。');targets[category]=counts[0];
+  if(counts[0]>10)throw Error('单类经历超过 10 条，请手动准备栏位后分段填写。');targets[category]=Math.max(counts[0],...learned.map(r=>r.record));
  }
  return targets;
 }

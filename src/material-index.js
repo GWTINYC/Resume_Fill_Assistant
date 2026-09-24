@@ -1,14 +1,16 @@
 // Deterministic references into the original text. No generated answer text is stored here.
 const titles=new Map([['教育背景','education'],['教育经历','education'],['实习经历','internship'],['工作经历','work'],['个人项目经历','project'],['项目经验','project'],['项目经历','project'],['课题项目经验','project'],['个人能力','skills'],['个人技能','skills'],['专业技能','skills'],['自我评价','skills'],['自我介绍','intro'],['在校实践','practice'],['校园经历','practice'],['获奖情况','awards'],['获奖经历','awards'],['论文/专著','publications']]);
 export function fieldRecord(field){
- if(field.sourceRecord&&['education','internship','work','project','practice','awards','publications'].includes(field.sourceRecord.category)&&Number.isInteger(field.sourceRecord.record)&&field.sourceRecord.record>0)return field.sourceRecord;
+ if(field.sourceRecord&&['education','internship','work','project','practice','awards','publications','family','language','skills','other'].includes(field.sourceRecord.category)&&Number.isInteger(field.sourceRecord.record)&&field.sourceRecord.record>0)return field.sourceRecord;
  const context=field.context||'';const record=Number(context.match(/第\s*(\d+)\s*条/)?.[1]||context.match(/(?:经历|经验)\s*(\d+)/)?.[1]||(/^(教育背景|(?:教育|实习|工作|项目)(?:经历|经验))$/.test(context.trim())?'1':''));
- const category=/^教育(?:经历|背景)/.test(context)?'education':/^实习(?:经历|经验)/.test(context)?'internship':/^工作(?:经历|经验)|^工作[／/和及、]实习经历/.test(context)?'work':/^课题项目经验|^项目(?:经历|经验)/.test(context)?'project':/^在校实践/.test(context)?'practice':/^获奖情况/.test(context)?'awards':/^论文\/专著/.test(context)?'publications':null;
+ const category=/^教育(?:经历|背景)/.test(context)?'education':/^实习(?:经历|经验)/.test(context)?'internship':/^工作(?:经历|经验)|^工作[／/和及、]实习经历/.test(context)?'work':/^课题项目经验|^项目(?:经历|经验)/.test(context)?'project':/^家庭|^亲属|^紧急联系/.test(context)?'family':/^外语|^语言/.test(context)?'language':/^在校实践/.test(context)?'practice':/^获奖情况/.test(context)?'awards':/^论文\/专著/.test(context)?'publications':null;
  return category&&record?{category,record}:null;
 }
 export function materialIndex(sources){
  const passages=[],records=[];
  for(const source of sources){
+  if(source.learned){const f=source.learned;passages.push({id:`p${passages.length}`,sourceId:source.id,category:f.category,record:f.record||null,label:f.label,kind:'block',start:0,end:source.text.length,text:source.text});if(f.record)records.push({sourceId:source.id,category:f.category,record:f.record,start:0,end:source.text.length,learned:true});continue;}
+
   const text=source.text;const structured=source.id.match(/^(education|work)\.(\d+)\./);let offset=0,category=structured?.[1]||'general',record=structured?Number(structured[2])+1:0;const counts={};const lines=[];
   for(const raw of text.split('\n')){
    const start=offset;offset+=raw.length+1;const content=raw.trim();const key=content.replace(/[：:]$/,'');
@@ -66,6 +68,7 @@ export function recordEvidenceMatches(field,evidence,index,sources){
  const relevant=index.records.filter(r=>r.category===expected.category);
  return evidence.every(e=>{
   const source=sources.find(s=>s.id===e.sourceId);if(!source)return false;
+  if(source.learned)return source.learned.category===expected.category&&source.learned.record===expected.record&&source.text.includes(e.quote);
   const structured=e.sourceId.match(/^(education|work)\.(\d+)\./);
   if(structured)return structured[1]===expected.category&&Number(structured[2])+1===expected.record&&source.text.includes(e.quote);
   const ranges=relevant.filter(r=>r.sourceId===e.sourceId&&r.record===expected.record);

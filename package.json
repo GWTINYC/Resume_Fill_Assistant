@@ -1,6 +1,6 @@
 {
   "name": "jev-apply",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,8 @@
     "test:recruiting": "node tests/recruiting.browser.mjs",
     "lab": "node tools/recruiting-lab.mjs",
     "test:record-slots": "node tests/record-slots.browser.mjs",
-    "test:moka": "node tests/moka.browser.mjs"
+    "test:moka": "node tests/moka.browser.mjs",
+    "test:learning": "node tests/learning.browser.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "^6.3.289"

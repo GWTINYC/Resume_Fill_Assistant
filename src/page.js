@@ -1,13 +1,14 @@
 // Runs in the extension's isolated world. Keep all helpers inside this function.
 export async function pageBridge(args) {
+  const capturing=args.action==='capture';
   const clean=s=>String(s??'').replace(/\s+/g,' ').trim().slice(0,220);
   // Moka uses CSS modules: match stable component prefixes, not build hashes.
   const mokaSelect='[class*="sd-Select-container-"]';
   const selectRoots='.phoenix-select,[role="combobox"],'+mokaSelect;
-  const recordRoots='.form,[class*="apply-fields-"]';
+  const recordRoots='.form,[class*="apply-fields-"],.form-cell-inner';
   const popupRoots='[role="listbox"],.phoenix-selectList,[class*="sd-Select-menu-"]';
-  const visible=el=>el?.isConnected&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&el.getClientRects().length>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none'&&!el.closest('[inert],[hidden],.phoenix-select--disabled,[class*=sd-Select-containerDisabled-]')&&(!el.matches(mokaSelect)||!el.querySelector('input:disabled'));
-  const labelText=node=>{const copy=node.cloneNode(true);for(const child of copy.querySelectorAll('input,select,textarea,button,[role="combobox"],script,style'))child.remove();return copy.textContent||'';};
+  const visible=el=>el?.isConnected&&el.getClientRects().length>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none'&&!el.closest('[inert],[hidden]')&&(capturing||!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.closest('.phoenix-select--disabled,[class*=sd-Select-containerDisabled-]')&&(!el.matches(mokaSelect)||!el.querySelector('input:disabled')));
+  const labelText=node=>{const copy=node.cloneNode(true);for(const child of copy.querySelectorAll('input,select,textarea,button,[role="combobox"],script,style,.labelRequired,.anticon'))child.remove();return copy.textContent||'';};
   const itemOf=el=>el.closest('.form-item,.ant-form-item,.el-form-item,.form-group,[class*=apply-field-]');
   const itemLabel=el=>{const item=itemOf(el);const label=item?.querySelector('.form-item__text,.ant-form-item-label,.el-form-item__label,.control-label,[class*=title-],label');return label?labelText(label):'';};
   const labelOf=el=>{
@@ -23,6 +24,8 @@ export async function pageBridge(args) {
   const dateLabel=part=>`${part.boundary==='start'?'开始':part.boundary==='end'?'结束':''}${part.unit==='year'?'年份':'月份'}`;
   const groupLabel=el=>clean(itemLabel(el)||el.closest('fieldset')?.querySelector('legend')?.innerText||el.closest('[role="radiogroup"]')?.getAttribute('aria-label')||'');
   const sectionInfo=el=>{
+    const hotjob=el.closest('.form-cell');
+    if(hotjob)return {title:clean(hotjob.querySelector('.tit-wrap .tit p')?.textContent||hotjob.querySelector('.tit-wrap .tit')?.textContent),scope:hotjob,form:el.closest('.form-cell-inner')};
     const moka=el.closest('[class*="apply-block-"]');
     if(moka){const heading=moka.querySelector('[class*="blockTitle-"]');return {title:clean(heading?labelText(heading):''),scope:moka,form:el.closest('[class*="apply-fields-"]')};}
     const form=el.closest('.form');
@@ -56,11 +59,14 @@ export async function pageBridge(args) {
   const radioSelected=el=>el.getAttribute('aria-checked')==='true'||!!el.querySelector('.phoenix-radio__circle--checked');
   const customValue=entry=>{
     if(entry.kind==='custom-radio')return [...entry.el.querySelectorAll(radioSelector)].find(radioSelected)?.textContent.trim()||'';
+    const display=s=>capturing?String(s??'').trim():clean(s);
     const el=entry.el;const tag=el.querySelector('.phoenix-select__tag,.phoenix-select__tagItem');
-    if(tag)return clean(tag.textContent);
-    if(el.matches(mokaSelect))return clean(el.querySelector('[class*=sd-Input-display-value-]')?.textContent);
-    if(el.matches('.phoenix-select'))return clean(el.querySelector('.phoenix-select__content')?.textContent);
-    return clean(el.getAttribute('aria-valuetext')||(el.tagName==='INPUT'?el.value:el.querySelector('input')?.value)||'');
+    if(tag)return display(tag.textContent);
+    const ant=el.querySelector('.ant-select-selection-selected-value');if(ant)return display(ant.textContent);
+    if(el.matches('.ant-select-selection,.ant-select-selector'))return [...el.querySelectorAll('.ant-select-selection__choice__content,.ant-select-selection-item')].map(n=>display(n.textContent)).join('、');
+    if(el.matches(mokaSelect))return display(el.querySelector('[class*=sd-Input-display-value-]')?.textContent);
+    if(el.matches('.phoenix-select'))return display(el.querySelector('.phoenix-select__content')?.textContent);
+    return display(el.getAttribute('aria-valuetext')||(el.tagName==='INPUT'?el.value:el.querySelector('input')?.value)||'');
   };
   const popupFor=el=>{
     const input=el.querySelector('input');const ids=[el.getAttribute('aria-controls'),el.getAttribute('aria-owns'),input?.getAttribute('aria-controls'),input?.getAttribute('aria-owns')].filter(Boolean).join(' ').split(/\s+/);
@@ -139,29 +145,30 @@ export async function pageBridge(args) {
     }
     return {ok:false,reason:'点击后 3 秒内未确认新增，已停止以避免重复添加；请等待页面完成或手动检查。'};
   }
-  if(args.action==='scan'){
+  if(args.action==='scan'||capturing){
     const state={token:args.token,url:location.href,title:document.title,entries:new Map()};globalThis.__jevApply=state;
-    const fields=[],seenRadios=new Set();
+    const fields=[],seenRadios=new Set(),capturedGroups=new Set();
     const elements=document.querySelectorAll('input,textarea,select,'+selectRoots+',.phoenix-radio-group,[role="radiogroup"]');
     for(const el of elements){
-      if(!visible(el)||['hidden','submit','reset','button','image','password','checkbox'].includes(el.type))continue;
+      if(!visible(el)||['hidden','submit','reset','button','image','password',...(capturing?['file']:['checkbox'])].includes(el.type))continue;
       if(el.closest('nav,header,[role="search"]')&&!el.closest('form,.form'))continue;
       const owner=el.parentElement?.closest(selectRoots);if(owner&&owner!==el)continue;
       const customRadio=el.matches('.phoenix-radio-group,[role="radiogroup"]')&&!el.querySelector('input[type="radio"]');
       if(el.matches('[role="radiogroup"]')&&!customRadio)continue;
       const customSelect=el.matches(selectRoots)&&el.tagName!=='SELECT';
       const datePart=datePartOf(el);
+      if(capturing&&el.closest('.ant-checkbox-group')&&capturedGroups.has(el.closest('.ant-checkbox-group')))continue;
       let type=customRadio?'radio':customSelect?'custom-select':el.type||'text';let radios=null,label=labelOf(el)+(datePart?' · '+dateLabel(datePart):''),options,kind;
       if(customRadio){label=groupLabel(el)||label;kind='custom-radio';options=[...el.querySelectorAll(radioSelector)].map(r=>({value:clean(r.textContent),label:clean(r.textContent),disabled:disabled(r)||!visible(r)}));}
       else if(type==='radio'){
-        const group=el.closest('fieldset,[role="radiogroup"]')||el.form||document;if(!el.name)continue;
+        const group=el.closest('.ant-radio-group,fieldset,[role="radiogroup"]')||el.form||document;if(!el.name&&!el.closest('.ant-radio-group'))continue;
         radios=[...group.querySelectorAll('input[type="radio"]')].filter(x=>x.name===el.name&&x.form===el.form);if(seenRadios.has(radios[0]))continue;seenRadios.add(radios[0]);label=groupLabel(el)||el.name;
       }
       if(consent.test(label+' '+(el.name||'')+' '+(el.autocomplete||'')))continue;
       let supported=['INPUT','SELECT','TEXTAREA'].includes(el.tagName)&&type!=='file'&&!el.readOnly;
       let reason='自定义或暂不支持的控件，需要手动填写';
       if(el.tagName==='INPUT'&&!['text','email','tel','url','number','date','month','search','radio'].includes(type))supported=false;
-      if(customSelect){
+      if(customSelect&&!capturing){
         kind='custom-select';supported=false;
         const multi=(el.classList.contains('phoenix-select--multi')||!!el.querySelector('[class*=sd-Tag-]'))||el.getAttribute('aria-multiselectable')==='true';
         const calendar=!!el.querySelector('use[href*="field_date_time_picker"],use[*|href*="field_date_time_picker"]');
@@ -169,20 +176,34 @@ export async function pageBridge(args) {
         else if(calendar)reason='自定义日期控件，已识别栏目，需手动选择日期';
         else {const popup=await openPopup(el);if(popup){options=(await stableOptions(popup)).map(({node,...o})=>o);supported=safeOptions(options)&&popup.getAttribute('aria-multiselectable')!=='true';await closePopup(el);}if(!supported)reason='已识别下拉栏目，但未能读取唯一完整的选项列表，请手动选择';}
       }
+      if(customSelect&&capturing)kind='custom-select';
       if(customRadio)supported=safeOptions(options);
       if(el.tagName==='SELECT'){supported=!el.multiple;options=[...el.options].map(o=>({value:o.value,label:clean(o.textContent),disabled:o.disabled||o.parentElement?.disabled===true}));}
-      if(radios)options=radios.map(o=>({value:o.value,label:labelOf(o),disabled:!visible(o)}));
+      if(radios)options=radios.map(o=>({value:o.value,label:clean(o.closest('label')?labelText(o.closest('label')):labelOf(o)),disabled:!visible(o)}));
       if(options?.length>250||options&&new Set(options.map(o=>o.value)).size!==options.length)supported=false;
       const id='f'+fields.length,entry={el,radios,kind,signature:signature(el,!!radios),options};
       const current=kind?customValue(entry):radios?(radios.find(x=>x.checked)?.value||''):(el.value||'');let hasValue=!!current;
       if(el.tagName==='SELECT'){const selected=el.selectedOptions[0];if(selected&&(/^(请选择|选择|please select|select|choose|--)/i.test(clean(selected.textContent))||selected.disabled))hasValue=false;}
       const item=itemOf(el);const maxLength=el.maxLength>0?el.maxLength:Number(item?.querySelector('.phoenix-textarea')?.textContent.match(/\/\s*(\d+)/)?.[1])||null;
-      fields.push({id,label,datePart,name:clean(el.name),type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required||el.getAttribute('aria-required')==='true'||!!item?.querySelector('.form-item__required'),maxLength,hasValue,options,supported,reason:supported?'':type==='file'?'附件需要手动上传':reason});state.entries.set(id,entry);
-      if(fields.length>=100)break;
+      let capturedValue,captureWarning;
+      if(capturing){
+        capturedValue=kind?customValue(entry):radios?(radios.find(r=>r.checked)?.closest('label')?.textContent?.trim()||''):(el.value||'');
+        if(el.tagName==='SELECT')capturedValue=hasValue?(el.selectedOptions[0]?.textContent?.trim()||''):'';
+        if(el.type==='checkbox'){
+          const group=el.closest('.ant-checkbox-group');if(!group)continue;capturedGroups.add(group);label=groupLabel(el)||label;
+          capturedValue=[...group.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.closest('label')?.textContent?.trim()).filter(Boolean).join('、');
+        }
+        const item=itemOf(el),combos=item?[...item.querySelectorAll('[role=combobox]')]:[];
+        if(customSelect&&combos.length>1&&!datePart){if(capturedGroups.has(item))continue;capturedGroups.add(item);capturedValue=combos.map(el=>customValue({el,kind:'custom-select'})).filter(Boolean).join(' / ');captureWarning='组合选项已按页面顺序合并，请核对含义。';}
+        if(!capturedValue.trim()||/^(请选择|please select|select|choose)(?:\s|$)/i.test(capturedValue)||capturedValue.length>10000)continue;
+        if(label==='未命名字段')captureWarning='未识别到字段标题，请先补全名称。';
+      }
+      fields.push({id,label,datePart,...(capturing?{capturedValue,captureWarning}:{}),name:clean(el.name),type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required||el.getAttribute('aria-required')==='true'||!!item?.querySelector('.form-item__required'),maxLength,hasValue,options,supported,reason:supported?'':type==='file'?'附件需要手动上传':reason});state.entries.set(id,entry);
+      if(fields.length>=(capturing?300:100))break;
     }
     const sections=discoverSections();state.sections=new Map(sections.map(s=>[s.id,s]));
     const experienceCategories=[...new Set([...document.querySelectorAll(recordRoots)].map(form=>{const c=form.querySelector('input,textarea,select,.phoenix-radio-group');return c?sectionCategory(sectionInfo(c).title):null;}).concat([...document.querySelectorAll('h1,h2,h3,h4,[role=tab],[class*=blockTitle-]')].map(n=>sectionCategory(clean(labelText(n))))).filter(Boolean))];
-    return {fields,sections:sections.map(publicSection),experienceCategories,url:location.href,title:document.title,pageContext:{title:clean(document.title),headings:[...new Set([...document.querySelectorAll('h1,h2,h3')].map(x=>clean(x.innerText)).concat(fields.map(f=>f.context.split(' · ')[0])))].filter(Boolean).slice(0,20),description:clean(document.querySelector('meta[name="description"]')?.content)},atLimit:fields.length>=100};
+    return {fields,sections:sections.map(publicSection),experienceCategories,url:location.href,title:document.title,pageContext:{title:clean(document.title),headings:[...new Set([...document.querySelectorAll('h1,h2,h3')].map(x=>clean(x.innerText)).concat(fields.map(f=>f.context.split(' · ')[0])))].filter(Boolean).slice(0,20),description:clean(document.querySelector('meta[name="description"]')?.content)},atLimit:fields.length>=(capturing?300:100)};
   }
   if(args.action==='fill'||args.action==='verify'){
     const state=globalThis.__jevApply;if(!state||state.token!==args.token||state.url!==location.href||state.title!==document.title)return {results:args.items.map(x=>({id:x.id,ok:false,reason:'页面已变化，请重新扫描'}))};

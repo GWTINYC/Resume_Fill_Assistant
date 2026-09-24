@@ -1,5 +1,6 @@
 import {pageBridge} from './page.js';
-import {getApiKey} from './storage.js';
+import {mergeLearnedFacts} from './learned.js';
+import {getLearnedFacts,setLearnedFacts,getApiKey} from './storage.js';
 import {deepseekPayload,validateDeepseekFills} from './deepseek.js';
 chrome.action.onClicked.addListener(tab=>{if(tab.windowId!==undefined)chrome.sidePanel.open({windowId:tab.windowId}).catch(()=>{});});
 async function inject(tabId,args,frameIds){
@@ -7,14 +8,25 @@ async function inject(tabId,args,frameIds){
   return chrome.scripting.executeScript({target:frameIds?{tabId,frameIds}:{tabId,allFrames:true},func:pageBridge,args:[args]});
 }
 async function handle(message){
-  if(message.action==='scan'){
+  if(message.action==='scan'||message.action==='capture'){
+    const action=message.action;
     const token=crypto.randomUUID();let results,limited=false;
-    try{results=await inject(message.tabId,{action:'scan',token});}
-    catch{results=await inject(message.tabId,{action:'scan',token},[0]);limited=true;}
+    try{results=await inject(message.tabId,{action,token});}
+    catch{results=await inject(message.tabId,{action,token},[0]);limited=true;}
     const fields=results.flatMap(r=>(r.result?.fields||[]).map(f=>({...f,localId:f.id,id:`${r.frameId}:${f.id}`,frameId:r.frameId})));
     const sections=results.flatMap(r=>(r.result?.sections||[]).map(s=>({...s,localId:s.id,id:`${r.frameId}:${s.id}`,frameId:r.frameId})));
     const experienceCategories=[...new Set(results.flatMap(r=>r.result?.experienceCategories||[]))];
-    return {token,fields,sections,experienceCategories,pageContext:results.find(r=>r.frameId===0)?.result?.pageContext||{},limited,atLimit:results.some(r=>r.result?.atLimit),frameCount:results.length};
+    return {token,fields,sections,experienceCategories,host:new URL(results.find(r=>r.frameId===0)?.result?.url||'https://unknown.invalid').hostname,pageContext:results.find(r=>r.frameId===0)?.result?.pageContext||{},limited,atLimit:results.some(r=>r.result?.atLimit),frameCount:results.length};
+  }
+  if(message.action==='save-learning'){
+    const current=await getLearnedFacts();
+    const incoming=message.facts.map(f=>({...f,id:crypto.randomUUID(),savedAt:new Date().toISOString()}));
+    const facts=mergeLearnedFacts(current,incoming);await setLearnedFacts(facts);return {count:incoming.length};
+  }
+  if(message.action==='edit-learning'){
+    const current=await getLearnedFacts(),old=current.find(f=>f.id===message.id);if(!old)throw Error('资料已变化，请刷新后重试。');
+    const facts=message.remove?current.filter(f=>f.id!==message.id):current.map(f=>f.id===message.id?{...f,value:message.value,enabled:message.enabled,savedAt:new Date().toISOString()}:f);
+    await setLearnedFacts(facts);return {};
   }
   if(message.action==='add-record'){
     if(!Number.isInteger(message.frameId)||typeof message.sectionId!=='string')throw Error('无效的经历章节');
@@ -56,7 +68,9 @@ async function handle(message){
   }
   throw Error('Unknown action');
 }
+let learningWrites=Promise.resolve();
 chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   if(sender.id!==chrome.runtime.id||!sender.url?.startsWith(chrome.runtime.getURL('')))return false;
-  handle(message).then(result=>reply({ok:true,...result})).catch(error=>reply({ok:false,error:error.name==='TimeoutError'?'服务响应超时，请稍后重试':error.message||'操作失败'}));return true;
+  const task=['save-learning','edit-learning'].includes(message.action)?(learningWrites=learningWrites.catch(()=>{}).then(()=>handle(message))):handle(message);
+  task.then(result=>reply({ok:true,...result})).catch(error=>reply({ok:false,error:error.name==='TimeoutError'?'服务响应超时，请稍后重试':error.message||'操作失败'}));return true;
 });

@@ -166,3 +166,31 @@ test('Moka date components keep start/end and record identity, without inventing
  assert.equal(run('startyear','2027','2027.06'),0);assert.equal(run('endyear','2027','2027.06'),1);
  assert.deepEqual(fieldRecord({context:'项目经验 · 第 2 条'}),{category:'project',record:2});
 });
+
+import {captureDraft,mergeLearnedFacts,learnedEntries,preferredLearned,validateLearnedFacts} from '../src/learned.js';
+const learnedFact=(extra={})=>({id:'a',label:'移动电话',value:'13900000001',category:'base',record:0,section:'个人基本信息',host:'example.test',scope:'global',enabled:true,...extra});
+test('page learning scopes family and preferences, requires confirmation, and preserves exact text',()=>{
+ const rows=captureDraft([{label:'姓名',context:'家庭关系 · 第 2 条',capturedValue:'示例母亲'},{label:'期望薪资',context:'个人基本信息',capturedValue:'面议'},{label:'工作描述',context:'实习经历 · 第 2 条',capturedValue:'原文。\n\n  空白不改。'},{label:'密码',capturedValue:'excluded'}],'example.test');
+ assert.equal(rows.length,3);assert.equal(rows[0].category,'family');assert.equal(rows[0].record,2);assert(!rows[0].selected);assert.equal(rows[1].scope,'site');assert(!rows[1].selected);assert.equal(rows[2].value,'原文。\n\n  空白不改。');assert(rows[2].selected);
+});
+test('learned values deduplicate, replace explicitly, disable and respect website scope',()=>{
+ const a=learnedFact(),b=learnedFact({id:'b',value:'13900000002'});const merged=mergeLearnedFacts([a],[b]);assert.equal(mergeLearnedFacts([],[a,a]).length,1);assert.equal(merged.length,1);assert.equal(merged[0].id,'a');assert.equal(merged[0].value,b.value);
+ const site=learnedFact({id:'site',scope:'site',value:'13900000003'});const all=validateLearnedFacts([a,site]);assert.equal(learnedEntries(all,'example.test')[0].value,site.value);assert.equal(learnedEntries(all,'another.test')[0].value,a.value);
+ assert.equal(learnedEntries(validateLearnedFacts([learnedFact({enabled:false})]),'example.test').length,0);
+ assert.throws(()=>mergeLearnedFacts([],[a,b]),/重复字段/);assert.throws(()=>validateLearnedFacts([learnedFact({label:'API key'})]),/无效字段/);
+});
+test('confirmed learned sources override older values only within the corresponding property and record',()=>{
+ const facts=validateLearnedFacts([learnedFact(),learnedFact({id:'skill',category:'skills',label:'评价内容',value:'原文技能\n第二行。',section:'自我评价'}),learnedFact({id:'family',category:'family',record:1,label:'姓名',value:'示例父亲',section:'家庭关系'})]);
+ const sources=applicantSources(learnedEntries(facts,'example.test'),{notes:'手机号：13900000000'},[]);const phone={id:'phone',label:'手机号',type:'text',supported:true};
+ assert.deepEqual(preferredLearned(phone,sources),['learned:a']);
+ const input=JSON.parse(deepseekPayload([phone],sources).messages.at(-1).content);assert(input.passages.every(p=>p.sourceId==='learned:a'));
+ assert.equal(validateDeepseekFills({fills:[{fieldId:'phone',value:'13900000000',evidence:[{sourceId:'notes',quote:'13900000000'}]}]},[phone],sources).fills.length,0);
+ const source=sources.find(s=>s.id==='learned:a');assert.equal(validateDeepseekFills({fills:[{fieldId:'phone',value:source.text,evidence:[{sourceId:source.id,quote:source.text}]}]},[phone],sources).fills.length,1);
+ assert.deepEqual(preferredLearned({label:'个人能力',context:'应聘资料'},sources),['learned:skill']);
+ const name={id:'name',label:'姓名',type:'text',supported:true};assert.equal(validateDeepseekFills({fills:[{fieldId:'name',value:'示例父亲',evidence:[{sourceId:'learned:family',quote:'示例父亲'}]}]},[name],sources).fills.length,0);
+});
+test('learned experiences retain records and supplement slot counts without treating each fact as a record',()=>{
+ const facts=validateLearnedFacts([learnedFact({id:'c1',category:'internship',record:1,label:'企业名称',value:'甲公司'}),learnedFact({id:'d1',category:'internship',record:1,label:'工作描述',value:'第一段'}),learnedFact({id:'c2',category:'internship',record:2,label:'企业名称',value:'乙公司'})]);const sources=applicantSources(learnedEntries(facts,'example.test'),{},[]);
+ assert.deepEqual(recordTargets(sources),{internship:2});const field={id:'co',label:'公司名称',context:'实习经历 · 第 2 条',supported:true,type:'text'};assert.deepEqual(preferredLearned(field,sources),['learned:c2']);
+ assert.equal(validateDeepseekFills({fills:[{fieldId:'co',value:'甲公司',evidence:[{sourceId:'learned:c1',quote:'甲公司'}]}]},[field],sources).fills.length,0);
+});
