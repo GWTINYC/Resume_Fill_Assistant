@@ -167,7 +167,7 @@ test('Moka date components keep start/end and record identity, without inventing
  assert.deepEqual(fieldRecord({context:'项目经验 · 第 2 条'}),{category:'project',record:2});
 });
 
-import {captureDraft,mergeLearnedFacts,learnedEntries,preferredLearned,validateLearnedFacts} from '../src/learned.js';
+import {captureDraft,mergeLearnedFacts,learnedEntries,preferredLearned,validateLearnedFacts,learnedSourceAllowed,learningContextWarning} from '../src/learned.js';
 const learnedFact=(extra={})=>({id:'a',label:'移动电话',value:'13900000001',category:'base',record:0,section:'个人基本信息',host:'example.test',scope:'global',enabled:true,...extra});
 test('page learning scopes family and preferences, requires confirmation, and preserves exact text',()=>{
  const rows=captureDraft([{label:'姓名',context:'家庭关系 · 第 2 条',capturedValue:'示例母亲'},{label:'期望薪资',context:'个人基本信息',capturedValue:'面议'},{label:'工作描述',context:'实习经历 · 第 2 条',capturedValue:'原文。\n\n  空白不改。'},{label:'密码',capturedValue:'excluded'}],'example.test');
@@ -193,6 +193,86 @@ test('learned experiences retain records and supplement slot counts without trea
  const facts=validateLearnedFacts([learnedFact({id:'c1',category:'internship',record:1,label:'企业名称',value:'甲公司'}),learnedFact({id:'d1',category:'internship',record:1,label:'工作描述',value:'第一段'}),learnedFact({id:'c2',category:'internship',record:2,label:'企业名称',value:'乙公司'})]);const sources=applicantSources(learnedEntries(facts,'example.test'),{},[]);
  assert.deepEqual(recordTargets(sources),{internship:2});const field={id:'co',label:'公司名称',context:'实习经历 · 第 2 条',supported:true,type:'text'};assert.deepEqual(preferredLearned(field,sources),['learned:c2']);
  assert.equal(validateDeepseekFills({fills:[{fieldId:'co',value:'甲公司',evidence:[{sourceId:'learned:c1',quote:'甲公司'}]}]},[field],sources).fills.length,0);
+});
+test('experience labels without record context require review instead of becoming global base facts',()=>{
+ const labels=['学校名称','学院名称','专业名称','公司名称','职务','项目名称','项目职务','项目职责'];
+ const rows=captureDraft(labels.map(label=>({label,capturedValue:'合成资料'})),'example.test');
+ for(const row of rows){assert.equal(row.category,'other',row.label);assert.equal(row.scope,'site');assert.equal(row.selected,false);assert.match(row.warning,/资料类目和第几条经历/);}
+ const basic=captureDraft([{label:'姓名',capturedValue:'示例本人'},{label:'手机号',capturedValue:'13900000001'},{label:'最高学历',capturedValue:'硕士'}],'example.test');
+ assert(basic.every(row=>row.category==='base'&&row.scope==='global'&&row.selected));
+ assert(learningContextWarning({label:'学校名称',context:'教育经历'}));
+ assert.equal(learningContextWarning({label:'学校名称',context:'教育经历 · 第 2 条'}),'');
+ assert.equal(learningContextWarning({label:'公司名称',sourceRecord:{category:'internship',record:2}}),'');
+});
+test('repeated captured fields without explicit records stay unselected even when their values agree',()=>{
+ for(const values of [['甲大学','乙大学'],['同一大学','同一大学']]){
+  const rows=captureDraft(values.map(capturedValue=>({label:'学校',context:'教育经历',capturedValue})),'example.test');
+  assert(rows.every(row=>!row.selected&&row.scope==='site'&&row.warning));
+ }
+ const names=captureDraft(['甲','乙'].map(capturedValue=>({label:'姓名',capturedValue})),'example.test');
+ assert(names.every(row=>!row.selected&&/同名资料/.test(row.warning)));
+ const numbered=captureDraft(['甲大学','乙大学'].map((capturedValue,i)=>({label:'学校',context:`教育经历 · 第 ${i+1} 条`,capturedValue})),'example.test');
+ assert(numbered.every(row=>row.selected&&row.scope==='global'));assert.deepEqual(numbered.map(row=>row.record),[1,2]);
+});
+test('experience dates and descriptions require context while numbered records still match their own facts',()=>{
+ const groups=[
+  ['教育经历','education',['开始日期','结束日期','开始时间','结束时间','起始时间','入学时间','毕业时间','学院名称']],
+  ['实习经历','internship',['入职时间','离职时间','实习内容','实习描述','实习职责','部门名称']],
+  ['工作经历','work',['工作职责','职务','公司名称']],
+  ['项目经历','project',['项目职务','项目职责','项目中职责','项目描述','项目介绍']]
+ ];
+ for(const [section,category,labels] of groups)for(const label of labels){
+  assert(learningContextWarning({label}),label);
+  assert.equal(captureDraft([{label,capturedValue:'合成资料'}],'example.test')[0].selected,false,label);
+  const facts=validateLearnedFacts([1,2].map(record=>learnedFact({id:'record'+record,label,value:'第'+record+'条原文',category,record,section})));
+  const sources=applicantSources(learnedEntries(facts,'another.test'),{},[]);
+  for(const record of [1,2]){
+   const target={label,context:`${section} · 第 ${record} 条`};assert.equal(learningContextWarning(target),'',label);
+   assert.deepEqual(preferredLearned(target,sources),['learned:record'+record],label);
+   assert.equal(learnedSourceAllowed(target,sources[record-1]),true,label);assert.equal(learnedSourceAllowed(target,sources[2-record]),false,label);
+  }
+ }
+});
+test('legacy base experience facts cannot fill contextless targets through local, model or routed matching',()=>{
+ const facts=validateLearnedFacts([learnedFact({id:'school',label:'学校名称',value:'甲大学',section:''}),learnedFact({id:'role',label:'项目职务',value:'负责人',section:''})]);
+ const entries=learnedEntries(facts,'another.test'),sources=applicantSources(entries,{},[]);
+ const fields=[{id:'school1',label:'学校名称'},{id:'school2',label:'学校名称'},{id:'role',label:'项目职务'}].map(f=>({...f,type:'text',supported:true,context:''}));
+ for(const field of fields){
+  assert.deepEqual(preferredLearned(field,sources),[]);
+  assert.equal(localMapping(field,entries.filter(entry=>learnedSourceAllowed(field,entry))),null);
+  for(const source of sources)assert.equal(learnedSourceAllowed(field,source),false);
+ }
+ const input=JSON.parse(deepseekPayload(fields,sources).messages.at(-1).content);assert.equal(input.passages.length,0);assert(input.fields.every(f=>f.candidatePassageIds.length===0));
+ assert.equal(routingPackets(fields,sources).packets.length,0);
+ const source=sources[0],index=materialIndex(sources),passage=index.passages.find(p=>p.sourceId===source.id);
+ for(const field of fields.slice(0,2)){
+  for(const proposal of [{fieldId:field.id,passageId:passage.id},{fieldId:field.id,value:source.text,evidence:[{sourceId:source.id,quote:source.text}]}]){
+   const result=validateDeepseekFills({fills:[proposal]},fields,sources);assert.equal(result.fills.length,0);assert.equal(result.rejected,1);assert(result.issues.length);
+  }
+  const range=sourceRanges(sources).find(r=>r.sourceId===source.id),routes=[{fieldId:field.id,rangeId:range.id}];
+  assert.equal(routedRange(field,sources,routes),null);
+  assert.equal(validateDeepseekFills({fills:[{fieldId:field.id,rangeId:range.id,quote:source.text,value:source.text}]},fields,sources,{routes}).fills.length,0);
+ }
+ // Keep old entries available for management/export, but not as unrelated base-field evidence.
+ assert.equal(entries.length,2);assert.equal(learnedSourceAllowed({label:'姓名'},source),false);
+ assert.equal(learnedSourceAllowed(fields[0],{id:'notes',text:'甲大学'}),true);
+});
+test('confirmed record assignments support a correction and relearning cycle without changing another record',()=>{
+ const draft=captureDraft(['甲大学','乙大学'].map(capturedValue=>({label:'学校名称',capturedValue})),'example.test');
+ const confirmed=draft.map((row,i)=>({...row,category:'education',record:i+1,scope:'global',selected:true}));
+ const first=mergeLearnedFacts([],confirmed);assert.equal(first.length,2);
+ const targets=[1,2].map(record=>({id:'school'+record,label:'学校名称',context:`教育经历 · 第 ${record} 条`,type:'text',supported:true}));
+ let sources=applicantSources(learnedEntries(first,'another.test'),{},[]);
+ for(const [i,target] of targets.entries()){
+  assert.deepEqual(preferredLearned(target,sources),['learned:'+first[i].id]);
+  const input=JSON.parse(deepseekPayload([target],sources).messages.at(-1).content);assert.equal(input.passages.length,1);
+  const result=validateDeepseekFills({fills:[{fieldId:target.id,passageId:input.passages[0].id}]},[target],sources);assert.equal(result.fills[0].value,confirmed[i].value);
+ }
+ const corrected=captureDraft([{...targets[1],capturedValue:'乙大学（已更正）'}],'another.test');assert(corrected[0].selected);
+ const updated=mergeLearnedFacts(first,corrected);assert.equal(updated.length,2);assert.equal(updated[0].value,'甲大学');assert.equal(updated[1].id,first[1].id);assert.equal(updated[1].value,'乙大学（已更正）');
+ sources=applicantSources(learnedEntries(updated,'third.test'),{},[]);
+ const preferred=preferredLearned(targets[1],sources);assert.deepEqual(preferred,['learned:'+first[1].id]);assert.equal(sources.find(s=>s.id===preferred[0]).text,'乙大学（已更正）');
+ const wrong=sources.find(s=>s.id==='learned:'+first[0].id);assert.equal(validateDeepseekFills({fills:[{fieldId:targets[1].id,value:wrong.text,evidence:[{sourceId:wrong.id,quote:wrong.text}]}]},targets,sources).fills.length,0);
 });
 
 import {AppError,importDiagnostic} from '../src/diagnostics.js';
