@@ -1,5 +1,5 @@
 import {pcKeyHint} from './native-keys.js';
-import {captureDraft,LEARN_CATEGORIES,learningProperty,factKey,learnedEntries,preferredLearned,learnedSourceAllowed} from './learned.js';
+import {captureDraft,LEARN_CATEGORIES,learningProperty,factKey,learnedEntries,preferredLearned,learnedSourceAllowed,learningContextWarning} from './learned.js';
 import {routeExperienceFields} from './experience-routing.js';
 import {ensureRecordSlots} from './record-slots.js';
 import {runCollaboration} from './collaboration.js';
@@ -41,6 +41,7 @@ function render(){
   const p=plan.get(f.id)||{entryId:'',value:null,checked:false};const card=document.createElement('div');card.className='field';
   const heading=document.createElement('label');heading.className='check';const check=document.createElement('input');check.type='checkbox';check.checked=p.checked;check.disabled=!f.supported||p.value===null||busy;check.dataset.unsupported=String(!f.supported||p.value===null);check.setAttribute('aria-label',`填入 ${f.label}`);check.addEventListener('change',()=>{p.checked=check.checked;updateCount();});const title=document.createElement('span');title.className='field-title';title.textContent=f.label;heading.append(check,title);card.append(heading);
   const meta=document.createElement('div');meta.className='field-meta';meta.textContent=[f.context,f.type,f.required?'必填':'',f.hasValue?'已有内容':'',p.source||'未匹配'].filter(Boolean).join(' · ');card.append(meta);
+  if(learningContextWarning(f)){const warning=document.createElement('p');warning.className='muted';warning.textContent='未识别出属于哪段经历，暂不自动复用已学习资料。请核对本项或在网页手动填写。';card.append(warning);}
   if(f.supported){const select=document.createElement('select');select.setAttribute('aria-label',`${f.label} 对应的资料项`);select.append(new Option('— 不填 / 选择资料项 —',''));for(const e of entries)select.append(new Option(e.label,e.id));if(p.ai)select.append(new Option('DeepSeek 建议（可编辑）','__deepseek__'));select.value=p.ai?'__deepseek__':p.entryId;select.disabled=busy;select.addEventListener('change',()=>{if(select.value!=='__deepseek__')setEntry(f,select.value);render();});card.append(select);}
   if(p.ai&&f.supported){
     const editor=document.createElement(f.options?.length?'select':'textarea');editor.setAttribute('aria-label',`${f.label} 待填内容`);editor.disabled=busy;

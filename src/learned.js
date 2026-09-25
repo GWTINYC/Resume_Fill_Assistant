@@ -4,12 +4,33 @@ export const LEARN_CATEGORIES={base:'个人基本信息',education:'教育经历
 const privateLabel=/证件|身份证|护照|准考证|成绩单编号|家庭|父亲|母亲/;
 const siteLabel=/期望|意向|调剂|应聘|招聘|渠道|薪资|薪酬|服从/;
 export const forbiddenLabel=/密码|验证码|同意|隐私|条款|声明|签名|password|captcha|consent|privacy|terms|token|api.?key/i;
+// A school/company/project label alone cannot identify which experience it belongs to.
+// Keep general degree questions (for example 最高学历) and personal/contact fields unchanged.
+const experienceLabels=new Set([
+ ...['education','internship','work','project'].flatMap(definitions).filter(([key])=>key!=='degree'),
+ ['college','学院',['学院名称','院系','院系名称','所属学院']],
+ ['department','部门',['部门名称','所属部门']],
+ ['title','职务名称',['项目职务','项目角色','担任角色']],
+ ['duties','实习职责',[]],['project','项目内容',[]]
+].flatMap(([,title,aliases])=>[title,...aliases]).map(normalize).filter(label=>!['description','from','to'].includes(label)));
+const experienceLabel=label=>experienceLabels.has(normalize(String(label||'').replace(/[（(][^）)]*[）)]/g,'')));
+function explicitLearningRecord(field){
+ const ref=fieldRecord(field);if(!ref)return null;
+ const explicitSource=field.sourceRecord?.category===ref.category&&field.sourceRecord?.record===ref.record;
+ return explicitSource||/第\s*\d+\s*条|(?:经历|经验)\s*\d+/.test(field.context||'')?ref:null;
+}
+export function learningContextWarning(field){
+ const section=(field.context||'').split(' · ')[0];
+ const experience=experienceLabel(field.label)||/^(教育(?:经历|背景)|实习(?:经历|经验)|工作(?:经历|经验|[／/和及、]实习经历)|(?:课题)?项目(?:经历|经验))/.test(section);
+ return experience&&!explicitLearningRecord(field)?'未能确认这项资料属于哪段经历，请先确认资料类目和第几条经历；不会自动复用到缺少经历上下文的字段。':'';
+}
 export function learningCategory(field){
  const section=(field.context||'').split(' · ')[0];const r=fieldRecord(field);if(r)return r.category;
  if(/家庭|亲属|紧急联系/.test(section))return 'family';
  if(/外语|语言/.test(section))return 'language';
  if(/自我评价|个人能力|个人技能|专业技能/.test(section+' '+(field.label||'')))return 'skills';
  if(/获奖/.test(section))return 'awards';
+ if(learningContextWarning(field))return 'other';
  if(!section||/^(个人|基本|联系)/.test(section)||BASE_FIELDS.some(([,title,aliases])=>[title,...aliases].some(a=>normalize(a)===normalize(field.label))))return 'base';return 'other';
 }
 function definitions(category){
@@ -44,9 +65,12 @@ export function validateLearnedFacts(raw){
  });
 }
 export function captureDraft(fields,host){
- return fields.filter(f=>typeof f.capturedValue==='string'&&f.capturedValue.trim()&&!forbiddenLabel.test(f.label)).map((f,i)=>{
-  const slot=learningSlot(f),review=privateLabel.test(f.label)||slot.category==='family'||siteLabel.test(f.label)||f.captureWarning;
-  return {...slot,id:'draft-'+i,label:f.label,value:f.capturedValue,host,scope:siteLabel.test(f.label)||slot.category==='other'?'site':'global',datePart:f.datePart,enabled:true,selected:!review,warning:f.captureWarning||(privateLabel.test(f.label)||slot.category==='family'?'请按需要勾选这项个人或家庭资料。':siteLabel.test(f.label)?'与本次应聘有关，默认仅用于当前网站。':'')};
+ const captured=fields.filter(f=>typeof f.capturedValue==='string'&&f.capturedValue.trim()&&!forbiddenLabel.test(f.label));
+ const slots=new Map();for(const f of captured){const k=key(learningSlot(f));slots.set(k,(slots.get(k)||0)+1);}
+ return captured.map((f,i)=>{
+  const slot=learningSlot(f),contextWarning=learningContextWarning(f)||(!explicitLearningRecord(f)&&slots.get(key(slot))>1?'同名资料缺少可区分的经历序号，请先确认资料类目和第几条经历，再勾选保存。':'');
+  const review=contextWarning||privateLabel.test(f.label)||slot.category==='family'||siteLabel.test(f.label)||f.captureWarning;
+  return {...slot,id:'draft-'+i,label:f.label,value:f.capturedValue,host,scope:contextWarning||siteLabel.test(f.label)||slot.category==='other'?'site':'global',datePart:f.datePart,enabled:true,selected:!review,warning:[contextWarning,f.captureWarning||(privateLabel.test(f.label)||slot.category==='family'?'请按需要勾选这项个人或家庭资料。':siteLabel.test(f.label)?'与本次应聘有关，默认仅用于当前网站。':'')].filter(Boolean).join(' ')};
  });
 }
 export function mergeLearnedFacts(existing,incoming){
@@ -61,9 +85,11 @@ export function learnedEntries(facts,host){
  return [...selected.values()].map(f=>({id:'learned:'+f.id,label:`已确认 · ${LEARN_CATEGORIES[f.category]}${f.record?' 第 '+f.record+' 条':''} · ${f.label}`,value:f.value,aliases:[f.label],learned:{category:f.category,record:f.record,property:f.property,section:f.section,label:f.label,scope:f.scope,host:f.host,datePart:f.datePart,savedAt:f.savedAt}}));
 }
 export function preferredLearned(field,sources){
- const slot=learningSlot(field);let matches=sources.filter(s=>s.learned&&key(s.learned)===key(slot));if(!matches.length&&field.datePart)matches=sources.filter(s=>s.learned&&key(s.learned)===key({...slot,property:field.datePart.boundary}));return matches.map(s=>s.id);
+ if(learningContextWarning(field))return [];
+ const slot=learningSlot(field),allowed=sources.filter(s=>s.learned&&learnedSourceAllowed(field,s));let matches=allowed.filter(s=>key(s.learned)===key(slot));if(!matches.length&&field.datePart)matches=allowed.filter(s=>key(s.learned)===key({...slot,property:field.datePart.boundary}));return matches.map(s=>s.id);
 }
 export function learnedSourceAllowed(field,source){
  if(!source.learned)return true;const slot=learningSlot(field),fact=source.learned;
+ if(learningContextWarning(field)||fact.category==='base'&&experienceLabel(fact.label))return false;
  return fact.category===slot.category&&fact.record===slot.record&&(fact.category!=='other'||normalize(fact.section)===normalize(slot.section));
 }
