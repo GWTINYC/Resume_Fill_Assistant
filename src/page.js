@@ -6,7 +6,8 @@ export async function pageBridge(args) {
   const mokaSelect='[class*="sd-Select-container-"]';
   const selectRoots='.phoenix-select,.ant-select,.el-select,.ant-cascader,.el-cascader,[role="combobox"],'+mokaSelect;
   const recordRoots='.form,[class*="apply-fields-"],.form-cell-inner';
-  const popupRoots='[role="listbox"],.phoenix-selectList,[class*="sd-Select-menu-"],.ant-select-dropdown,.el-select-dropdown,.ant-cascader-menus,.ant-cascader-dropdown,.el-cascader__dropdown';
+  const beisenRoots='.constant-main-selector-container,.area-selector-container,.phoenix-calendar';
+  const popupRoots=beisenRoots+',[role="listbox"],.phoenix-selectList,[class*="sd-Select-menu-"],.ant-select-dropdown,.el-select-dropdown,.ant-cascader-menus,.ant-cascader-dropdown,.el-cascader__dropdown';
   const visible=el=>el?.isConnected&&el.getClientRects().length>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none'&&!el.closest('[inert],[hidden]')&&(capturing||!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.closest('.phoenix-select--disabled,.ant-select-disabled,.el-select.is-disabled,.ant-cascader-disabled,.el-cascader.is-disabled,[class*=sd-Select-containerDisabled-]')&&(!el.matches(mokaSelect)||!el.querySelector('input:disabled')));
   const labelText=node=>{const copy=node.cloneNode(true);for(const child of copy.querySelectorAll('input,select,textarea,button,[role="combobox"],script,style,.labelRequired,.anticon'))child.remove();return copy.textContent||'';};
   const itemOf=el=>el.closest('.form-item,.ant-form-item,.el-form-item,.form-group,[class*=apply-field-]');
@@ -82,9 +83,13 @@ export async function pageBridge(args) {
     const inside=[...new Set([...(owner||el).querySelectorAll(popupRoots)].map(outerMenu).filter(visible))];return inside.length===1?inside[0]:null;
   };
   const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-  const press=node=>{node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'mouse',button:0}));node.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));node.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'mouse',button:0}));node.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,button:0}));node.click();};
+  const press=node=>{node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'mouse',button:0}));node.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));node.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'mouse',button:0}));node.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,button:0}));if(typeof node.click==='function')node.click();else node.dispatchEvent(new MouseEvent('click',{bubbles:true}));};
   const trigger=el=>el.querySelector('.ant-select-selector,.ant-select-selection,.el-select__wrapper,.el-input__wrapper')||el;
   const closePopup=async el=>{
+    const current=popupFor(el);
+    if(current?.matches('.constant-main-selector-container,.area-selector-container')){
+      const cancel=dialogButton(current,'取消');if(!cancel)throw Error('[SELECT_CANCEL] 弹窗缺少唯一取消按钮，已停止操作');press(cancel);await waitUntil(()=>!visible(current),'SELECT_CANCEL','取消后弹窗未关闭，请手动关闭后重试');return;
+    }
     (el.querySelector('input')||el).dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}));await pause(30);
     if(popupFor(el)){press(trigger(el));await pause(30);}
     // Blur without clicking an unrelated page button.
@@ -101,8 +106,8 @@ export async function pageBridge(args) {
     }
     return null;
   };
-  const readOptions=popup=>[...popup.querySelectorAll(choiceSelector)].filter(n=>visible(n)&&!n.parentElement?.closest(choiceSelector)&&(!popup.querySelector('.ant-select-item-option')||n.matches('.ant-select-item-option'))).map(node=>{
-    const text=node.querySelector('[data-key="sugar.select.label"],.ant-select-item-option-content,.ant-cascader-menu-item-content,.el-cascader-node__label')?.textContent||node.textContent;
+  const readOptions=popup=>[...popup.querySelectorAll(popup.matches('.constant-main-selector-container')?'.left-container .list-item-container':choiceSelector)].filter(n=>visible(n)&&!n.parentElement?.closest(choiceSelector)&&(!popup.querySelector('.ant-select-item-option')||n.matches('.ant-select-item-option'))).map(node=>{
+    const text=node.querySelector('.item-text-label,[data-key="sugar.select.label"],.ant-select-item-option-content,.ant-cascader-menu-item-content,.el-cascader-node__label')?.textContent||node.textContent;
     const label=String(text||'').replace(/\s+/g,' ').trim();return {node,value:label,label,disabled:disabled(node)};
   });
   const stableOptions=async popup=>{
@@ -114,7 +119,7 @@ export async function pageBridge(args) {
   const scrollArea=popup=>[popup,...popup.querySelectorAll('*')].find(n=>n.clientHeight>0&&n.scrollHeight>n.clientHeight+3&&/(auto|scroll)/.test(getComputedStyle(n).overflowY));
   const isCascade=el=>el.matches('.ant-cascader,.el-cascader')||el.getAttribute('data-control-type')==='cascader';
   const normalizedPath=value=>String(value).replace(/\s*(?:\/|／|>|＞|→)\s*/g,'').replace(/\s+/g,'');
-  const selectedEquals=(entry,value)=>entry.selectionMode==='cascade'?normalizedPath(customValue(entry))===normalizedPath(value):customValue(entry)===value;
+  const selectedEquals=(entry,value)=>entry.kind==='beisen-calendar'?calendarValue(customValue(entry),entry.calendarType)===value:entry.kind==='beisen-area'?normalizedPath(customValue(entry))===normalizedPath(value)||entry.areaReceipt?.value===value&&entry.areaReceipt.display===customValue(entry):entry.selectionMode==='cascade'?normalizedPath(customValue(entry))===normalizedPath(value):customValue(entry)===value;
   const seekOption=async(popup,value)=>{
     const scroller=scrollArea(popup);if(scroller){scroller.scrollTop=0;scroller.dispatchEvent(new Event('scroll',{bubbles:true}));await pause(100);}
     let last=-1;
@@ -139,6 +144,88 @@ export async function pageBridge(args) {
       if(consumed===expected)return;
     }
     throw Error('[CASCADE_DEPTH] 级联层级超过支持范围，请手动选择');
+  };
+  const dialogButton=(popup,label)=>{
+    const footer=popup.querySelector('.selector-footer-button,.area-footer-button');
+    const matches=[...(footer?.querySelectorAll('.phoenix-button__content')||[])].filter(n=>visible(n)&&clean(n.textContent)===label);
+    return matches.length===1&&!matches[0].closest('[aria-disabled="true"],[class*="--disabled"],.disabled')?matches[0]:null;
+  };
+  const dialogLimit=popup=>{
+    const text=popup.querySelector('.select-data-num,.selected-area-title,.right-container')?.textContent||'';
+    return Number(text.match(/(?:已选[^\d]*)?\d+\s*[/／]\s*(\d+)/)?.[1])||null;
+  };
+  const waitUntil=async(fn,code,message)=>{for(let i=0;i<30;i++){const result=fn();if(result)return result;await pause(80);}throw Error(`[${code}] ${message}`);};
+  const textInput=(input,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true,composed:true}));};
+  const confirmDialog=async(popup)=>{
+    const button=dialogButton(popup,'确定');if(!button)throw Error('[SELECT_CONFIRM] 弹窗没有唯一可用的确定按钮');
+    press(button);await waitUntil(()=>!visible(popup),'SELECT_CONFIRM','已点确定但弹窗仍未关闭');
+  };
+  const chooseBeisen=async(entry,popup,value)=>{
+    if(dialogLimit(popup)!==1)throw Error('[SELECT_MULTI] 当前弹窗不是可确认的单选模式');
+    let option=await seekOption(popup,value);
+    if(!option){
+      const search=popup.querySelector('input[placeholder="搜索"]');if(!search)throw Error('[SELECT_NO_MATCH] 弹窗中没有对应选项或搜索框');
+      textInput(search,value);await pause(400);option=await seekOption(popup,value);
+    }
+    if(!option)throw Error('[SELECT_NO_MATCH] 搜索后未找到唯一且可用的选项');
+    press(option.node.querySelector('.icon-container svg')||option.node.querySelector('.icon-container')||option.node.querySelector('.item-text-label')||option.node);
+    await waitUntil(()=>/已选\s*1\s*[/／]\s*1/.test(popup.querySelector('.right-container')?.textContent||''),'SELECT_STAGE','选择后未确认进入已选区');
+    const right=popup.querySelector('.select-data-container');if(!right?.textContent.includes(value))throw Error('[SELECT_STAGE] 已选内容与目标不一致，未点击确定');
+    await confirmDialog(popup);
+  };
+  const chooseBeisenArea=async(entry,popup,value)=>{
+    if(dialogLimit(popup)!==1)throw Error('[SELECT_MULTI] 地区多选暂需手动确认');
+    const expected=normalizedPath(value);let prefix='';
+    for(let depth=0;depth<5;depth++){
+      const rows=await waitUntil(()=>{const rows=[...popup.querySelectorAll('.left-container .area-item-container')].filter(visible);return rows.length?rows:null;},'AREA_LOAD','地区列表未加载完成');
+      const candidates=rows.map(row=>({row,label:clean(row.querySelector('.area-text-label')?.textContent)})).filter(x=>x.label&&expected.startsWith(prefix+normalizedPath(x.label)));
+      if(candidates.length!==1)throw Error('[AREA_PATH] 当前层级无法唯一匹配，请提供完整省市区名称');
+      const {row,label}=candidates[0];prefix+=normalizedPath(label);
+      if(prefix===expected){
+        const icon=row.querySelector('.icon-container');if(!icon||!visible(icon))throw Error('[AREA_LEVEL] 当前层级不可选择');press(icon.querySelector('svg')||icon);
+        await waitUntil(()=>/已选地区\s*1\s*[/／]\s*1/.test(popup.querySelector('.right-container')?.textContent||''),'SELECT_STAGE','地区未进入已选区');
+        if(!popup.querySelector('.right-container')?.textContent.includes(label))throw Error('[SELECT_STAGE] 已选地区与目标不一致');
+        await confirmDialog(popup);await waitUntil(()=>normalizedPath(customValue(entry))===expected||normalizedPath(customValue(entry))===normalizedPath(label),'SELECT_NOT_COMMITTED','确认地区后网页未保留预期值');
+        // Leaf-only display is accepted only after this exact path was traversed and confirmed.
+        entry.areaReceipt={value,display:customValue(entry)};return;
+      }
+      const nav=row.querySelector('.area-text-label:not(.no-hover)');if(!nav)throw Error('[AREA_PATH] 当前地区没有可进入的下一层级');
+      const previous=rows.map(r=>r.textContent).join('|');press(nav);
+      await waitUntil(()=>[...popup.querySelectorAll('.left-container .area-item-container')].filter(visible).map(r=>r.textContent).join('|')!==previous,'AREA_LOAD','点击地区后下一层级未加载');
+    }
+    throw Error('[AREA_PATH] 地区路径层级超过支持范围');
+  };
+  const calendarValue=(value,type)=>{
+    const m=String(value).trim().match(/^(\d{4})[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?月?$/);if(!m||type==='date'&&!m[3]||type==='month'&&m[3])return null;
+    const [year,month,day]=[Number(m[1]),Number(m[2]),Number(m[3]||1)],d=new Date(Date.UTC(year,month-1,day));
+    return d.getUTCFullYear()===year&&d.getUTCMonth()===month-1&&d.getUTCDate()===day?`${m[1]}-${m[2].padStart(2,'0')}${type==='date'?'-'+m[3].padStart(2,'0'):''}`:null;
+  };
+  const calendarDisabled=node=>disabled(node)||!!node.closest('[class*="disabled"],[aria-disabled="true"]');
+  const chooseCalendar=async(entry,popup,value)=>{
+    if(calendarValue(value,entry.calendarType)!==value)throw Error('[DATE_FORMAT] 日期格式或精度不符合控件要求，不能补造日期');
+    const [year,month,day]=value.split('-').map(Number);
+    const yearButton=popup.querySelector('.phoenix-calendar-month-panel-year-select')||popup.querySelector('.phoenix-calendar-year-select');if(!yearButton)throw Error('[DATE_PANEL] 未识别年份切换按钮');press(yearButton);
+    await waitUntil(()=>popup.querySelector('.phoenix-calendar-year-panel'),'DATE_PANEL','年份面板未打开');
+    let chosen=false;
+    for(let step=0;step<25;step++){
+      const years=[...popup.querySelectorAll('.phoenix-calendar-year-panel-year')].filter(visible);const target=years.filter(n=>Number(clean(n.textContent))===year);
+      if(target.length===1){if(calendarDisabled(target[0]))throw Error('[DATE_DISABLED] 目标年份不可选');press(target[0]);chosen=true;break;}
+      const numbers=years.map(n=>Number(clean(n.textContent))).filter(Number.isFinite);if(!numbers.length)throw Error('[DATE_PANEL] 未读取到年份选项');
+      const nav=popup.querySelector(year<Math.min(...numbers)?'.phoenix-calendar-year-panel-prev-decade-btn':'.phoenix-calendar-year-panel-next-decade-btn');if(!nav||calendarDisabled(nav))throw Error('[DATE_RANGE] 目标年份超出控件范围');
+      const previous=numbers.join();press(nav);await waitUntil(()=>[...popup.querySelectorAll('.phoenix-calendar-year-panel-year')].map(n=>Number(clean(n.textContent))).join()!==previous,'DATE_PANEL','年份翻页未生效');
+    }
+    if(!chosen)throw Error('[DATE_RANGE] 年份导航达到次数上限');
+    await waitUntil(()=>!popup.querySelector('.phoenix-calendar-year-panel'),'DATE_PANEL','选择年份后面板未切换');
+    if(!popup.querySelector('.phoenix-calendar-month-panel')){const button=popup.querySelector('.phoenix-calendar-month-select');if(!button)throw Error('[DATE_PANEL] 未识别月份按钮');press(button);}
+    await waitUntil(()=>popup.querySelector('.phoenix-calendar-month-panel-month'),'DATE_PANEL','月份面板未打开');
+    const months=[...popup.querySelectorAll('.phoenix-calendar-month-panel-month')].filter(n=>Number(clean(n.textContent).replace('月',''))===month&&visible(n));
+    if(months.length!==1||calendarDisabled(months[0]))throw Error('[DATE_DISABLED] 目标月份不可选');press(months[0]);
+    if(entry.calendarType==='month')return;
+    await waitUntil(()=>!popup.querySelector('.phoenix-calendar-month-panel'),'DATE_PANEL','选择月份后日期面板未显示');
+    const shownYear=Number(clean(popup.querySelector('.phoenix-calendar-year-select')?.textContent).replace('年','')),shownMonth=Number(clean(popup.querySelector('.phoenix-calendar-month-select')?.textContent).replace('月',''));
+    if(shownYear!==year||shownMonth!==month)throw Error('[DATE_PANEL] 日历展示的年月与目标不一致');
+    const days=[...popup.querySelectorAll('.phoenix-calendar-cell:not(.phoenix-calendar-last-month-cell):not(.phoenix-calendar-next-month-btn-day) .phoenix-calendar-date')].filter(n=>Number(clean(n.textContent))===day&&visible(n));
+    if(days.length!==1||calendarDisabled(days[0]))throw Error('[DATE_DISABLED] 目标日期不可选');press(days[0]);
   };
   const safeOptions=options=>options.length>0&&options.length<=250&&options.every(o=>o.value)&&new Set(options.map(o=>o.value)).size===options.length;
   const sectionCategory=title=>({'教育背景':'education','教育经历':'education','实习经历':'internship','实习经验':'internship','工作经历':'work','工作经验':'work','工作/实习经历':'work','工作／实习经历':'work','项目经验':'project','项目经历':'project','课题项目经验':'project'}[title]);
@@ -206,7 +293,7 @@ export async function pageBridge(args) {
       const customSelect=el.matches(selectRoots)&&el.tagName!=='SELECT';
       const datePart=datePartOf(el);
       if(capturing&&el.closest('.ant-checkbox-group')&&capturedGroups.has(el.closest('.ant-checkbox-group')))continue;
-      let type=customRadio?'radio':customSelect?'custom-select':el.type||'text';let radios=null,label=labelOf(el)+(datePart?' · '+dateLabel(datePart):''),options,kind,selectionMode;
+      let type=customRadio?'radio':customSelect?'custom-select':el.type||'text';let radios=null,label=labelOf(el)+(datePart?' · '+dateLabel(datePart):''),options,kind,selectionMode,calendarType;
       if(customRadio){label=groupLabel(el)||label;kind='custom-radio';options=[...el.querySelectorAll(radioSelector)].map(r=>({value:clean(r.textContent),label:clean(r.textContent),disabled:disabled(r)||!visible(r)}));}
       else if(type==='radio'){
         const group=el.closest('.ant-radio-group,fieldset,[role="radiogroup"]')||el.form||document;if(!el.name&&!el.closest('.ant-radio-group'))continue;
@@ -221,13 +308,22 @@ export async function pageBridge(args) {
         const multi=(el.classList.contains('phoenix-select--multi')||!!el.querySelector('[class*=sd-Tag-]'))||el.matches('.ant-select-multiple,.ant-select-enabled.ant-select-multiple')||!!el.querySelector('.el-select__tags,.ant-select-selection--multiple,.ant-select-selection__choice,.el-tag')||el.getAttribute('aria-multiselectable')==='true';
         const calendar=!!el.querySelector('use[href*="field_date_time_picker"],use[*|href*="field_date_time_picker"]');
         if(multi)reason='[SELECT_MULTI] 当前为多选控件，需手动确认各选项';
-        else if(calendar)reason='自定义日期控件，已识别栏目，需手动选择日期';
         else {
           const popup=await openPopup(el);
           if(popup){
-            options=(await stableOptions(popup)).map(({node,...o})=>o);
-            selectionMode=isCascade(el)?'cascade':searchInput(el)?'search':scrollArea(popup)?'virtual':'list';
-            supported=popup.getAttribute('aria-multiselectable')!=='true'&&(safeOptions(options)||!options.length&&selectionMode==='search');
+            if(popup.matches('.phoenix-calendar')){
+              calendarType=popup.querySelector('.phoenix-calendar-month-panel')&&!popup.querySelector('.phoenix-calendar-input')?'month':popup.querySelector('.phoenix-calendar-input')?'date':null;
+              if(calendarType){type=calendarType;kind='beisen-calendar';supported=true;}
+            }else if(popup.matches('.constant-main-selector-container,.area-selector-container')){
+              const area=popup.matches('.area-selector-container');kind=area?'beisen-area':'beisen-select';selectionMode=area?'cascade':'search';
+              options=area?[]:(await stableOptions(popup)).map(({node,...o})=>o);
+              supported=dialogLimit(popup)===1&&!!dialogButton(popup,'确定')&&!!dialogButton(popup,'取消')&&(area||safeOptions(options)||!options.length);
+              if(!supported)reason='[SELECT_MULTI] 弹窗不是可确认的单选模式，需手动处理';
+            }else if(!calendar){
+              options=(await stableOptions(popup)).map(({node,...o})=>o);
+              selectionMode=isCascade(el)?'cascade':searchInput(el)?'search':scrollArea(popup)?'virtual':'list';
+              supported=popup.getAttribute('aria-multiselectable')!=='true'&&(safeOptions(options)||!options.length&&selectionMode==='search');
+            }
             await closePopup(el);
           }
           if(!supported)reason=popup?'[SELECT_OPTIONS] 选项为空、重复或数量过多，无法安全匹配':'[SELECT_POPUP] 未找到与字段唯一关联的下拉菜单';
@@ -238,7 +334,7 @@ export async function pageBridge(args) {
       if(el.tagName==='SELECT'){supported=!el.multiple;options=[...el.options].map(o=>({value:o.value,label:clean(o.textContent),disabled:o.disabled||o.parentElement?.disabled===true}));}
       if(radios)options=radios.map(o=>({value:o.value,label:clean(o.closest('label')?labelText(o.closest('label')):labelOf(o)),disabled:!visible(o)}));
       if(options?.length>250||options&&new Set(options.map(o=>o.value)).size!==options.length)supported=false;
-      const id='f'+fields.length,entry={el,radios,kind,selectionMode,signature:signature(el,!!radios),options};
+      const id='f'+fields.length,entry={el,radios,kind,selectionMode,calendarType,signature:signature(el,!!radios),options};
       const current=kind?customValue(entry):radios?(radios.find(x=>x.checked)?.value||''):(el.value||'');let hasValue=!!current;
       if(el.tagName==='SELECT'){const selected=el.selectedOptions[0];if(selected&&(/^(请选择|选择|please select|select|choose|--)/i.test(clean(selected.textContent))||selected.disabled))hasValue=false;}
       const item=itemOf(el);const maxLength=el.maxLength>0?el.maxLength:Number(item?.querySelector('.phoenix-textarea')?.textContent.match(/\/\s*(\d+)/)?.[1])||null;
@@ -276,7 +372,7 @@ export async function pageBridge(args) {
       let target=el;
       try{
         if(kind){
-          const dynamic=['search','virtual','cascade'].includes(entry.selectionMode);
+          const dynamic=kind==='beisen-calendar'||['search','virtual','cascade'].includes(entry.selectionMode);
           if(!dynamic&&!entry.options?.some(o=>!o.disabled&&o.value===value))throw Error('[SELECT_VALUE] 没有经过扫描确认的对应选项');
           if(kind==='custom-radio'){
             const matches=[...el.querySelectorAll(radioSelector)].filter(n=>!disabled(n)&&visible(n)&&clean(n.textContent)===value);
@@ -285,7 +381,10 @@ export async function pageBridge(args) {
             let popup,input,oldQuery,searched=false,clicked=false;
             try{
               popup=await openPopup(el);if(!popup)throw Error('[SELECT_POPUP] 无法打开对应下拉菜单');
-              if(entry.selectionMode==='cascade'){await chooseCascade(el,popup,value);clicked=true;}
+              if(kind==='beisen-calendar'){await chooseCalendar(entry,popup,value);clicked=true;}
+              else if(kind==='beisen-select'){await chooseBeisen(entry,popup,value);clicked=true;}
+              else if(kind==='beisen-area'){await chooseBeisenArea(entry,popup,value);clicked=true;}
+              else if(entry.selectionMode==='cascade'){await chooseCascade(el,popup,value);clicked=true;}
               else{
                 input=searchInput(el);let option=await seekOption(popup,value);
                 if(!option&&entry.selectionMode==='search'&&input){

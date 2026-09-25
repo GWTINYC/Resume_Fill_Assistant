@@ -11,7 +11,7 @@ let experienceCategories=[],recordSections=[],entries=[],fields=[],plan=new Map(
 let learnedFacts=[],learnedSnapshot='',learningDraft=[];
 const usage={jev:0,deepseekInput:0,deepseekOutput:0};
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
-function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite','connect-pc-keys'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea'))el.disabled=value||el.dataset.unsupported==='true';}
+function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite','connect-pc-keys'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea,button'))el.disabled=value||el.dataset.unsupported==='true';}
 async function message(data){const r=await chrome.runtime.sendMessage(data);if(!r?.ok)throw Error(r?.error||'扩展未响应，请重新加载');return r;}
 async function profile(host){
  const {profile}=await chrome.storage.local.get('profile');savedProfile=profile||{};entries=profileEntries(savedProfile);profileSnapshot=JSON.stringify(savedProfile);materials=await listMaterials();materialSnapshot=materialsSnapshot(materials);learnedFacts=await getLearnedFacts();learnedSnapshot=JSON.stringify(learnedFacts);entries.push(...learnedEntries(learnedFacts,host));
@@ -48,6 +48,13 @@ function render(){
     else editor.maxLength=10000;
     editor.value=p.value??'';editor.onchange=()=>{p.value=defaultFieldValue(f,editor.value);p.source='手动修改 DeepSeek 建议';p.edited=true;p.result=undefined;if(p.auditDescription)p.auditDescription='已手动修改，当前值尚未经过双 AI 校核';if(p.value===null||p.value===''){p.value=null;p.checked=false;}render();};card.append(editor);
   }else{const value=document.createElement('div');value.className='value';if(!f.supported)value.textContent=f.reason;else if(p.value!==null){const label=f.options?.find(x=>x.value===p.value)?.label;value.textContent=label?`${label}（${p.value}）`:String(p.value);}else value.textContent=p.entryId?'无法直接匹配网页格式或选项，可使用智能匹配或手动填写网页。':'尚无待填内容。';card.append(value);}
+  if(f.supported){
+    const manual=document.createElement('details'),summary=document.createElement('summary');summary.textContent='直接指定并填入此项';manual.append(summary);
+    const note=document.createElement('p');note.className='muted';note.textContent='使用你已确认的值，不调用模型；仍检查控件格式、已有内容和填写结果。';manual.append(note);
+    const input=document.createElement('textarea');input.maxLength=10000;input.value=p.value??'';input.setAttribute('aria-label',`${f.label} 手动待填值`);input.disabled=busy;manual.append(input);
+    const button=document.createElement('button');button.className='small';button.textContent='仅填此项';button.disabled=busy;
+    button.onclick=()=>{const raw=input.value.trim(),value=defaultFieldValue(f,raw);if(!raw||value===null){status('该值不符合日期格式或未对应唯一选项，请核对后重试。',true);return;}for(const item of plan.values())item.checked=false;plan.set(f.id,{entryId:'',value,source:'手动指定',checked:true});updateCount();$('fill').click();};manual.append(button);card.append(manual);
+  }
   if(p.evidence?.length){const evidence=document.createElement('p');evidence.className='muted';evidence.textContent=(p.edited?'原模型依据（编辑后请重新核对）：':'资料出处：')+p.evidence.map(e=>`${e.label}「${e.quote}」`).join('；');card.append(evidence);}
   if(p.reason){const reason=document.createElement('p');reason.className='muted';reason.textContent=p.reason;card.append(reason);}
   if(p.auditDescription){const audit=document.createElement('p');audit.className='muted';audit.textContent=p.auditDescription;card.append(audit);}
@@ -132,7 +139,7 @@ $('fill').onclick=async()=>{lock(true);try{
  if(JSON.stringify(await getLearnedFacts())!==learnedSnapshot)throw Error('已学习资料发生变化，请重新扫描。');
  const items=fields.filter(f=>plan.get(f.id)?.checked&&plan.get(f.id)?.value!==null).map(f=>({...f,value:plan.get(f.id).value}));if(!items.length)throw Error('请勾选要填入的字段。');
  if(items.some(f=>plan.get(f.id)?.ai)&&materialsSnapshot(await listMaterials())!==materialSnapshot)throw Error('简历素材或使用设置已变化，请重新扫描并识别。');
- const r=await message({action:'fill',tabId,token,overwrite:$('overwrite').checked,items});for(const x of r.results){const p=plan.get(x.id);if(p){p.result=x.reason;p.checked=false;}}
+ const r=await message({action:'fill',tabId,token,overwrite:$('overwrite').checked,items});const written=items.filter(item=>r.results.some(x=>x.id===item.id&&x.ok));if(written.length){await new Promise(resolve=>setTimeout(resolve,250));const check=await message({action:'verify',tabId,token,items:written});for(const result of r.results)if(result.ok){const verified=check.results?.find(x=>x.id===result.id);result.ok=verified?.ok===true;result.reason=verified?.reason||'无法核验网页值，请手动检查';}}for(const x of r.results){const p=plan.get(x.id);if(p){p.result=x.reason;p.checked=false;}}
  status(`已填入 ${r.results.filter(x=>x.ok).length} 项，跳过或失败 ${r.results.filter(x=>!x.ok).length} 项。请检查网页上的内容及校验提示，再自行继续网申。`);
  }catch(e){status(e.message,true);}finally{lock(false);render();}};
 function showCollaboration(progress){
