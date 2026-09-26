@@ -60,7 +60,7 @@ test('semantic category prompts permit synonyms but forbid rewriting in both mod
  }
  const packet=auditPackets([aboutProposal(teamSources[1].text)],teamFields,teamSources)[0];
  assert(packet.payload.questions.q0_fit.instructions.includes('个人技能'));
- assert(packet.payload.questions.q0_unsupported.instructions.includes('complete relevant prepared passage'));
+ assert(packet.payload.questions.q0_unsupported.instructions.includes('完整复制相关准备好的原文段落'));
 });
 test('verbatim gate preserves multiline wording but rejects paraphrase, translation and stitching',()=>{
  const source={id:'cv',label:'个人技能',text:'个人技能：\n熟悉 React；参与页面开发。\n能够与团队沟通需求。\n其他：英语四级。'};
@@ -243,7 +243,7 @@ test('routed extraction can take an atomic fact from prose without inventing a p
 test('low-confidence routing never reaches DeepSeek or page writes',async()=>{
  let draft=0,writes=0;
  const results=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},judge:async p=>{const result=teamJudge(p);result.answers.q0.confidence=.6;return result;},draft:async()=>{draft++;return {fills:[nameProposal]}},apply:async()=>{writes++;return {ok:true}}});
- assert.equal(draft,0);assert.equal(writes,0);assert.match(results[0].reason,/ROUTE_NONE/);
+ assert.equal(draft,0);assert.equal(writes,0);assert.match(results[0].reason,/ROUTE_LOW_CONFIDENCE/);
 });
 test('routing partitions cover every source and competing regions are held as ambiguous',async()=>{
  const sources=Array.from({length:24},(_,i)=>({id:'s'+i,label:'资料'+i,text:'示例姓名'}));const seen=new Set();let drafts=0;
@@ -257,4 +257,35 @@ test('dynamic selectors permit only grounded original search/path values beyond 
   assert.equal(validateDeepseekFills({fills:[{fieldId:'f',value,evidence:[{sourceId:'cv',quote:sources[0].text}]}]},[f],sources).fills.length,1);
   assert.equal(validateDeepseekFills({fills:[{fieldId:'f',value:'凭空猜测',evidence:[{sourceId:'cv',quote:sources[0].text}]}]},[f],sources).fills.length,0);
  }
+});
+
+test('routing questions isolate target identity from neighbouring labels',()=>{
+ const sources=[{id:'base.email',label:'邮箱',text:'a@example.test'},{id:'cv',label:'TXT',text:'教育经历\n硕士：示例大学\n2024.09—2027.06'}];
+ const fields=[{id:'email',label:'邮箱',type:'text',supported:true,context:'个人信息 · 第 1 条 · 同组字段：姓名、出生日期、邮箱'}, {id:'start',label:'开始时间',type:'month',supported:true,context:'教育经历 · 第 1 条 · 同组字段：学校名称、开始时间、结束时间',sourceRecord:{category:'education',record:1}}];
+ const {packets}=routingPackets(fields,sources),p=packets[0].payload,q=packets[1].payload;
+ assert(p.questions.q0.instructions.includes('"label":"邮箱"'));assert(q.questions.q0.instructions.includes('"record":1'));
+ assert(p.state.fields.every(f=>!f.context.includes('同组字段')));
+ assert(!q.questions.q0.instructions.includes('学校名称、开始时间'));
+});
+
+test('routing limits confirmed profile facts and record context before model classification',()=>{
+ const sources=[{id:'base.email',label:'邮箱',text:'new@example.test'},{id:'cv',label:'旧简历',text:'邮箱：old@example.test\n实习经历\n公司：甲\n公司：乙'}];
+ const fields=[{id:'email',label:'邮箱',supported:true,context:'个人信息'}, {id:'relative',label:'邮箱',supported:true,context:'家庭信息 · 第 1 条'}, {id:'intern',label:'单位名称',supported:true,context:'实习经历 · 第 2 条'}];
+ const {packets}=routingPackets(fields,sources);const p=packets.find(p=>p.active.some(x=>x.field.id==='email'));
+ assert.deepEqual(p.payload.state.ranges.map(x=>x.sourceId),['base.email']);
+ const work=packets.find(p=>p.active.some(x=>x.field.id==='intern'));assert(work.payload.state.ranges.every(x=>x.category==='internship'&&x.record===2));
+ assert(!packets.some(p=>p.active.some(x=>x.field.id==='relative')&&p.payload.state.ranges.some(x=>x.sourceId==='base.email')));
+});
+
+test('confirmed exact facts fill without probabilistic rematching but still verify writes',async()=>{
+ const profile={base:{gender:'男',birthday:'2001年2月3日'},education:[],work:[]},entries=profileEntries(profile),sources=applicantSources(entries,profile,[]);
+ const fields=[{id:'g',label:'性别',context:'个人信息',type:'radio',supported:true,options:[{value:'male',label:'男'},{value:'female',label:'女'}]}, {id:'b',label:'出生日期',context:'个人信息',type:'date',supported:true}];
+ const writes=[];const result=await runCollaboration({fields,sources,entries,assertFresh:async()=>{},draft:()=>{throw Error('unexpected draft')},judge:()=>{throw Error('unexpected classifier')},apply:async(f,v)=>{writes.push([f.id,v]);return {ok:f.id==='g',reason:'readback'}}});
+ assert.deepEqual(writes,[['g','male'],['b','2001-02-03']]);assert.equal(result[0].review.method,'confirmed');assert.equal(result[1].status,'failed');
+});
+test('confirmed shortcuts cannot invent date precision, select ambiguous options or borrow family facts',async()=>{
+ const profile={base:{gender:'男',birthday:'2001-02',fullName:'本人'},education:[],work:[]},entries=profileEntries(profile),sources=applicantSources(entries,profile,[]);
+ const fields=[{id:'g',label:'性别',type:'radio',supported:true,options:[{value:'m1',label:'男'},{value:'m2',label:'男'}]},{id:'b',label:'出生日期',type:'date',supported:true},{id:'r',label:'姓名',context:'家庭信息 · 第 1 条',type:'text',supported:true}];
+ const result=await runCollaboration({fields,sources,entries,assertFresh:async()=>{},judge:async p=>({answers:Object.fromEntries(Object.keys(p.questions).map(k=>[k,{type:'choice',choice:'none',confidence:1,probabilities:{none:1}}]))}),draft:()=>{throw Error('unexpected draft')},apply:()=>{throw Error('unexpected write')}});
+ assert(result.every(x=>x.status==='needs_review'));
 });

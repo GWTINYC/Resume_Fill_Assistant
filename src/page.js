@@ -97,12 +97,18 @@ export async function pageBridge(args) {
   };
   const openPopup=async el=>{
     let popup=popupFor(el);if(popup)return popup;
-    const before=new Set([...document.querySelectorAll(popupRoots)].map(outerMenu).filter(visible));press(trigger(el));
-    for(let i=0;i<25;i++){
-      await pause(60);popup=popupFor(el);if(popup)return popup;
-      // Portal menus can be outside the field. Only one newly visible menu is safe.
-      const fresh=[...new Set([...document.querySelectorAll(popupRoots)].map(outerMenu).filter(n=>visible(n)&&!before.has(n)))];
-      if(fresh.length===1){popupCache.set(el,fresh[0]);return fresh[0];}
+    const rect=el.getBoundingClientRect();
+    if(rect.top<0||rect.bottom>innerHeight){el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});await pause(100);}
+    for(let attempt=0;attempt<2;attempt++){
+      const before=new Set([...document.querySelectorAll(popupRoots)].map(outerMenu).filter(visible));press(trigger(el));
+      for(let i=0;i<25;i++){
+        await pause(60);popup=popupFor(el);if(popup)return popup;
+        // Portal menus can be outside the field. Only one newly visible menu is safe.
+        const fresh=[...new Set([...document.querySelectorAll(popupRoots)].map(outerMenu).filter(n=>visible(n)&&!before.has(n)))];
+        if(fresh.length===1){popupCache.set(el,fresh[0]);return fresh[0];}
+      }
+      // A missed opening may be retried once; never toggle an unassociated open menu.
+      if(!visible(el)||[...document.querySelectorAll(popupRoots)].some(visible))break;
     }
     return null;
   };

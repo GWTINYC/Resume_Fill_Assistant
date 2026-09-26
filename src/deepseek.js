@@ -19,7 +19,7 @@ export function isVerbatimValue(field,value,evidence,sources){
   return evidence.some(e=>typeof e.quote==='string'&&e.quote.includes(value));
 }
 export function applicantSources(entries,profile,materials){
-  const sources=entries.map(e=>({id:e.id,label:e.label,text:e.value,...(e.learned?{learned:e.learned}:{})}));
+  const sources=entries.map(e=>({id:e.id,label:e.label,text:e.value,confirmed:/^(base\.|education\.\d+\.|work\.\d+\.)/.test(e.id)||!!e.learned,...(e.learned?{learned:e.learned}:{})}));
   if(profile?.notes?.trim())sources.push({id:'notes',label:'补充个人信息',text:profile.notes});
   for(const m of materials||[])if(m.enabled!==false&&m.text?.trim())sources.push({id:'material:'+m.id,label:m.name,text:m.text});
   return sources;
