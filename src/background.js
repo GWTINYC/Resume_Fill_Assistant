@@ -1,6 +1,6 @@
 import {pageBridge} from './page.js';
-import {mergeLearnedFacts} from './learned.js';
-import {getLearnedFacts,setLearnedFacts,getApiKey} from './storage.js';
+import {mergeLearnedFacts,validateLearnedFacts,factKey} from './learned.js';
+import {getRejectedAnswers,getLearnedFacts,setLearnedFacts,getApiKey} from './storage.js';
 import {deepseekPayload,validateDeepseekFills} from './deepseek.js';
 chrome.action.onClicked.addListener(tab=>{if(tab.windowId!==undefined)chrome.sidePanel.open({windowId:tab.windowId}).catch(()=>{});});
 async function inject(tabId,args,frameIds){
@@ -20,8 +20,16 @@ async function handle(message){
   }
   if(message.action==='save-learning'){
     const current=await getLearnedFacts();
-    const incoming=message.facts.map(f=>({...f,id:crypto.randomUUID(),savedAt:new Date().toISOString()}));
-    const facts=mergeLearnedFacts(current,incoming);await setLearnedFacts(facts);return {count:incoming.length};
+    const incoming=validateLearnedFacts(message.facts.map(f=>({...f,id:crypto.randomUUID(),savedAt:new Date().toISOString()})));
+    const facts=mergeLearnedFacts(current,incoming);await setLearnedFacts(facts);await chrome.storage.local.set({rejectedAnswers:(await getRejectedAnswers()).filter(x=>!incoming.some(f=>factKey(f)===factKey(x)&&f.value===x.value))});return {count:incoming.length};
+  }
+  if(message.action==='reject-answer'){
+    const [fact]=validateLearnedFacts([{...message.fact,id:crypto.randomUUID(),savedAt:new Date().toISOString()}]);
+    const existing=await getRejectedAnswers();const kept=existing.filter(x=>factKey(x)!==factKey(fact)||x.value!==fact.value);
+    await chrome.storage.local.set({rejectedAnswers:validateLearnedFacts([...kept,fact])});return {};
+  }
+  if(message.action==='remove-rejection'){
+    await chrome.storage.local.set({rejectedAnswers:(await getRejectedAnswers()).filter(x=>x.id!==message.id)});return {};
   }
   if(message.action==='edit-learning'){
     const current=await getLearnedFacts(),old=current.find(f=>f.id===message.id);if(!old)throw Error('资料已变化，请刷新后重试。');
@@ -33,8 +41,8 @@ async function handle(message){
     const results=await inject(message.tabId,{action:'add-record',token:message.token,sectionId:message.sectionId,target:message.target},[message.frameId]);
     const result=results[0]?.result;if(!result?.ok)throw Error(result?.reason||'未确认新增成功');return result;
   }
-  if(message.action==='fill'||message.action==='verify'){
-    const frames=new Map();for(const item of message.items){if(!frames.has(item.frameId))frames.set(item.frameId,[]);frames.get(item.frameId).push({id:item.localId,value:item.value});}
+  if(['fill','verify','mark-review','read-current'].includes(message.action)){
+    const frames=new Map();for(const item of message.items){if(!frames.has(item.frameId))frames.set(item.frameId,[]);frames.get(item.frameId).push({id:item.localId,value:item.value,mark:item.mark});}
     const all=[];
     for(const [frameId,items]of frames){
       try{const out=await inject(message.tabId,{action:message.action,token:message.token,overwrite:message.overwrite===true,items},[frameId]);for(const r of out)all.push(...(r.result?.results||[]).map(x=>({...x,id:`${frameId}:${x.id}`})));}
@@ -71,6 +79,6 @@ async function handle(message){
 let learningWrites=Promise.resolve();
 chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   if(sender.id!==chrome.runtime.id||!sender.url?.startsWith(chrome.runtime.getURL('')))return false;
-  const task=['save-learning','edit-learning'].includes(message.action)?(learningWrites=learningWrites.catch(()=>{}).then(()=>handle(message))):handle(message);
+  const task=['save-learning','edit-learning','reject-answer','remove-rejection'].includes(message.action)?(learningWrites=learningWrites.catch(()=>{}).then(()=>handle(message))):handle(message);
   task.then(result=>reply({ok:true,...result})).catch(error=>reply({ok:false,error:error.name==='TimeoutError'?'服务响应超时，请稍后重试':error.message||'操作失败'}));return true;
 });

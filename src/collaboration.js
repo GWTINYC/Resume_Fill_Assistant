@@ -1,4 +1,5 @@
 import {routingPackets,readRouteDecisions,evidenceInRange,confirmedRange} from './source-routing.js';
+import {rejectedForField,wasRejected} from './learned.js';
 import {acceptedChoice,defaultFieldValue,localMapping,normalize} from './core.js';
 import {isVerbatimValue,validateDeepseekFills} from './deepseek.js';
 const encoder=new TextEncoder();
@@ -65,13 +66,13 @@ export function combineAudit(field,proposal,entries,checks){
  const reasons=localConcerns(field,proposal,entries);const policies=new Set(checks.map(x=>x.policy));const policy=policies.size===1?[...policies][0]:null;
  if(!policy)reasons.push('Jev 无法明确判断字段类型或各段校核意见不一致。');
  const thresholds=REVIEW_THRESHOLDS[policy]||REVIEW_THRESHOLDS.fact;
- for(const [key,label]of [['fit','字段与经历对应'],['grounded','原文保持与内容完整性'],['consistent','跨素材一致性']])if(!checks.length||checks.some(x=>x[key]===null||x[key]<thresholds[key]))reasons.push(`${label}未通过校核。`);
+ for(const [key,label]of [['fit','字段与经历对应'],['grounded','原文保持与内容完整性'],['consistent','跨素材一致性']])if(!checks.length||checks.some(x=>x[key]===null||x[key]<thresholds[key]))reasons.push(`${label}未通过校核（最低分 ${checks.length&&checks.every(x=>x[key]!==null)?Math.min(...checks.map(x=>x[key])).toFixed(2):'未返回'} / 门槛 ${thresholds[key].toFixed(2)}）。`);
  const scores=Object.fromEntries(['fit','grounded','consistent'].map(key=>[key,checks.length&&checks.every(x=>x[key]!==null)?Math.min(...checks.map(x=>x[key])):null]));
  return {approved:reasons.length===0,policy,scores,reasons};
 }
 function checkSignal(signal){if(signal?.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');}
 // Dependencies are injectable so the full workflow can be tested without live keys.
-export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false}){
+export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,fillUncertain=false,rejectedAnswers=[]}){
  const target=fields.filter(f=>f.supported&&(!f.hasValue||overwrite));
  const records=new Map(fields.map(f=>[f.id,{fieldId:f.id,status:f.supported?(f.hasValue&&!overwrite?'skipped':'pending'):'skipped',reason:f.supported?'已有内容，已跳过':f.reason||'不支持的控件',history:[]}]))
  if(!target.length)return [...records.values()];
@@ -82,32 +83,35 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
   const range=confirmedRange(field,sources);if(!range)continue;
   const value=defaultFieldValue(field,range.text);if(value===null)continue;
   const {fills}=validateDeepseekFills({fills:[{fieldId:field.id,value,evidence:[{sourceId:range.sourceId,quote:range.text}],reason:'使用同一字段与经历中已确认的资料，仅作确定性格式适配'}]},[field],sources);
-  if(!fills.length)continue;
+  if(!fills.length||wasRejected(field,fills[0].value,rejectedAnswers))continue;
   const record=records.get(field.id);record.proposal=fills[0];record.status='approved';record.reason='已确认资料与字段身份、原文和格式核验通过，等待填写';record.route={...range,rangeId:range.id};record.review={approved:true,policy:'fact',method:'confirmed',reasons:[]};
  }
  let pending=target.filter(f=>records.get(f.id).status!=='approved');
  for(let round=0;round<2&&pending.length;round++){
   checkSignal(signal);await assertFresh();const candidates=[];
-  const feedbackFor=f=>({fieldId:f.id,previous:records.get(f.id).proposal?.value||'',problems:records.get(f.id).review?.reasons||[records.get(f.id).reason]});
-  const routing=routingPackets(pending,sources,round?pending.map(feedbackFor):[]),votes=new Map(pending.map(f=>[f.id,[]])),routeIssues=new Map(pending.map(f=>[f.id,[]]));
+  const feedbackFor=f=>({fieldId:f.id,previous:records.get(f.id).proposal?.value||'',problems:[...(records.get(f.id).review?.reasons||[records.get(f.id).reason]),...rejectedForField(f,rejectedAnswers).map(x=>'用户已拒绝此字段的答案：'+x.value+'；请选择其它有依据的原文，否则留空。')]});
+  const retained=new Set(round?pending.filter(f=>{const r=records.get(f.id);return r.route&&r.review?.scores?.fit>=.9&&r.review?.scores?.consistent>=.9;}).map(f=>f.id):[]);
+  const routing=routingPackets(pending.filter(f=>!retained.has(f.id)),sources,pending.map(feedbackFor)),votes=new Map(pending.map(f=>[f.id,[]])),routeIssues=new Map(pending.map(f=>[f.id,[]]));
   for(const [i,packet]of routing.packets.entries()){
    checkSignal(signal);await assertFresh();emit('route',`Jev 正在${round?'重新':''}定位素材范围 ${i+1} / ${routing.packets.length}`);
    const response=await judge(packet.payload);checkSignal(signal);
-   for(const decision of readRouteDecisions(packet,response.answers)){if(decision.rangeId)votes.get(decision.fieldId).push(decision);else routeIssues.get(decision.fieldId).push(decision.reason);}
+   for(const decision of readRouteDecisions(packet,response.answers,fillUncertain)){if(decision.rangeId)votes.get(decision.fieldId).push(decision);else routeIssues.get(decision.fieldId).push(decision.reason);}
   }
   const routed=[];
   for(const f of pending){
-   const record=records.get(f.id),choices=votes.get(f.id);
+   const record=records.get(f.id);let choices=votes.get(f.id);
+   if(fillUncertain&&choices.length>1)choices=[{...choices.sort((a,b)=>b.confidence-a.confidence)[0],uncertain:true}];
+   if(retained.has(f.id)){routed.push(f);continue;}
    // More than one independently accepted region is ambiguous, even across partitions.
-   if(choices.length!==1){record.status='needs_review';record.reason=choices.length?'[ROUTE_AMBIGUOUS] 多个素材范围都匹配，请确认使用哪份资料。':routeIssues.get(f.id).find(x=>!x.includes('[ROUTE_NONE]'))||routeIssues.get(f.id)[0]||'[ROUTE_NO_CANDIDATE] 当前类目和经历没有可用素材范围，请检查章节及经历识别。';record.proposal=null;record.review=null;record.route=null;continue;}
+   if(choices.length!==1){record.status='needs_review';record.reason=choices.length?'[ROUTE_AMBIGUOUS] 多个素材范围都匹配，请确认使用哪份资料。':routeIssues.get(f.id).find(x=>!x.includes('[ROUTE_NONE]'))||routeIssues.get(f.id)[0]||'[ROUTE_NO_CANDIDATE] 当前类目和经历没有可用素材范围，请检查章节及经历识别。';record.route=null;continue;}
    record.route={...choices[0],...routing.ranges.find(r=>r.id===choices[0].rangeId)};routed.push(f);
   }
   for(let i=0;i<routed.length;i+=6){
    checkSignal(signal);const batch=routed.slice(i,i+6);emit(round?'repair':'draft',`${round?'DeepSeek 正在修正提取与格式':'DeepSeek 正在指定范围提取原文并适配控件'} ${i+1}–${Math.min(i+6,routed.length)} / ${routed.length}`);
-   const feedback=round?batch.map(f=>({fieldId:f.id,previous:records.get(f.id).proposal?.value||'',problems:records.get(f.id).review?.reasons||[records.get(f.id).reason]})):[];
+   const feedback=batch.filter(f=>round||rejectedForField(f,rejectedAnswers).length).map(feedbackFor);
    const response=await draft(batch,{collaborative:true,feedback,pageContext,routes:batch.map(f=>({fieldId:f.id,rangeId:records.get(f.id).route.rangeId}))});checkSignal(signal);
    const returned=new Map(response.fills.map(p=>[p.fieldId,p]));
-   for(const f of batch){const record=records.get(f.id),proposal=returned.get(f.id);if(!proposal){record.status='needs_review';record.reason=response.issues?.find(x=>x.fieldId===f.id)?.reason||'没有找到语义匹配且可原文填入的素材；请补充资料或手动填写。';record.review=null;record.proposal=null;continue;}if(!evidenceInRange(proposal,record.route)){record.status='needs_review';record.reason='[SOURCE_RANGE] 引用超出 Jev 指定范围，未采用答案。';record.proposal=null;record.review=null;continue;}record.proposal=proposal;record.status='checking';record.reason='等待 Jev 独立校核';candidates.push(proposal);}
+   for(const f of batch){const record=records.get(f.id),proposal=returned.get(f.id);if(!proposal){record.status='needs_review';record.reason=response.issues?.find(x=>x.fieldId===f.id)?.reason||'没有找到语义匹配且可原文填入的素材；请补充资料或手动填写。';continue;}if(!evidenceInRange(proposal,record.route)){record.status='needs_review';record.reason='[SOURCE_RANGE] 引用超出 Jev 指定范围，未采用答案。';continue;}record.proposal=proposal;record.status='checking';record.reason='等待 Jev 独立校核';candidates.push(proposal);}
   }
   const packets=auditPackets(candidates,fields,sources,pageContext);if(auditCalls+packets.length>AUDIT_LIMIT)throw Error('本次协作达到校核次数上限，尚未自动填入，请减少字段或素材后重试。');
   const checks=new Map(candidates.map(p=>[p.fieldId,[]]));
@@ -120,9 +124,18 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
  }
  checkSignal(signal);await assertFresh();
  for(const record of records.values()){
+  const f=seenFields.get(record.fieldId),p=record.proposal;
+  if(p&&wasRejected(f,p.value,rejectedAnswers)){record.status='needs_review';record.reason='[USER_REJECTED] 你之前已拒绝同一字段的这个答案；没有找到替代素材，留空。';record.proposal=null;continue;}
+  if(fillUncertain&&record.status==='needs_review'&&p&&record.review){
+   const valid=validateDeepseekFills({fills:[p]},[f],sources).fills.length===1&&!localConcerns(f,p,entries).length;
+   if(valid){record.status='approved';record.uncertain=true;record.reason='有素材依据，但模型校核未通过；将先填入并标记待确认';}
+  }
+  if(fillUncertain&&record.route?.uncertain&&record.status==='approved')record.uncertain=true;
+ }
+ for(const record of records.values()){
   if(record.status!=='approved')continue;checkSignal(signal);await assertFresh();emit('fill',`正在填入并核验：${seenFields.get(record.fieldId).label}`);
-  const result=await apply(seenFields.get(record.fieldId),record.proposal.value);
-  record.status=result.ok?'filled':'failed';record.reason=result.reason;
+  const result=await apply(seenFields.get(record.fieldId),record.proposal.value,{uncertain:!!record.uncertain});
+  record.status=result.ok?(record.uncertain?'filled_review':'filled'):'failed';record.reason=(result.ok&&record.uncertain?'已填入 · 待你确认。':'')+result.reason;
  }
  emit('complete','协作完成');return [...records.values()];
 }

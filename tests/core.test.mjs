@@ -289,3 +289,52 @@ test('confirmed shortcuts cannot invent date precision, select ambiguous options
  const result=await runCollaboration({fields,sources,entries,assertFresh:async()=>{},judge:async p=>({answers:Object.fromEntries(Object.keys(p.questions).map(k=>[k,{type:'choice',choice:'none',confidence:1,probabilities:{none:1}}]))}),draft:()=>{throw Error('unexpected draft')},apply:()=>{throw Error('unexpected write')}});
  assert(result.every(x=>x.status==='needs_review'));
 });
+
+
+import {confirmationFacts,learningProperty} from '../src/learned.js';
+test('confirmation preserves option labels, site and record identity and reuses after restart',async()=>{
+ const field={id:'degree',label:'学历',context:'教育经历 · 第 2 条',type:'select-one',supported:true,options:[{value:'opaque-b',label:'本科'},{value:'opaque-m',label:'硕士'}],value:'opaque-b'};
+ const facts=validateLearnedFacts(JSON.parse(JSON.stringify(confirmationFacts([field],'example.test'))));
+ assert.equal(facts[0].value,'本科');assert.equal(facts[0].scope,'site');assert.equal(facts[0].record,2);
+ assert.equal(learnedEntries(facts,'other.test').length,0);
+ const entries=learnedEntries(facts,'example.test'),sources=applicantSources(entries,{},[]);
+ const changed={...field,options:[{value:'new-b',label:'本科'},{value:'new-m',label:'硕士'}]};let wrote;
+ const result=await runCollaboration({fields:[changed],sources,entries,assertFresh:async()=>{},judge:()=>{throw Error('No model needed after confirmation')},draft:()=>{throw Error('No draft needed')},apply:async(f,v)=>{wrote=v;return {ok:true}}});
+ assert.equal(wrote,'new-b');assert.equal(result[0].review.method,'confirmed');
+ assert.equal(preferredLearned({...field,context:'教育经历 · 第 1 条'},sources).length,0);
+ assert.equal(preferredLearned({...field,context:'实习经历 · 第 2 条'},sources).length,0);
+ assert.throws(()=>confirmationFacts([{...field,value:'missing'}],'example.test'),/格式/);
+ assert.throws(()=>confirmationFacts([{...field,label:'同意条款'}],'example.test'),/无效字段/);
+ assert.throws(()=>confirmationFacts([{...field,type:'date',options:[],value:'2027-06'}],'example.test'),/格式/);
+ assert.equal(learningProperty('学历?','base'),'degree');assert.equal(learningProperty('毕业时间(与毕业证一致)?','base'),'graduationDate');assert.equal(learningProperty('学院名称','education'),'college');
+});
+test('format repair retains an accepted range instead of a fluctuating second route',async()=>{
+ let routes=0,audits=0,drafts=0,writes=0;
+ const result=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},judge:async p=>{const r=teamJudge(p);if(p.state.stage==='route'){routes++;if(routes>1)r.answers.q0.confidence=.1;}else{audits++;if(audits===1)r.answers.q0_unsupported.noul=.2;}return r;},draft:async()=>{drafts++;return {fills:[nameProposal]}},apply:async()=>{writes++;return {ok:true}}});
+ assert.equal(routes,1);assert.equal(drafts,2);assert.equal(writes,1);assert.equal(result[0].status,'filled');
+});
+test('a lost repair keeps the last grounded proposal for explicit feedback only',async()=>{
+ for(const lost of ['route','draft']){
+ let routes=0,drafts=0;
+ const result=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:teamEntries,assertFresh:async()=>{},judge:async p=>{const r=teamJudge(p);if(p.state.stage==='route'){routes++;if(lost==='route'&&routes>1)r.answers.q0.confidence=.1;}else{r.answers.q0_unsupported.noul=.2;if(lost==='route')r.answers.q0_fit.noul=.7;}return r;},draft:async()=>({fills:++drafts===2?[]:[nameProposal]}),apply:()=>{throw Error('Unapproved suggestion must not fill')}});
+ assert.equal(result[0].status,'needs_review');assert.equal(result[0].proposal.value,nameProposal.value);assert.equal(result[0].review.approved,false);
+ }
+});
+
+
+test('opt-in low confidence fills grounded originals with a review flag, never invented content',async()=>{
+ for(const value of ['陈晓','凭空改写姓名']){
+ let written=null,meta;
+ const result=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:[],fillUncertain:true,assertFresh:async()=>{},judge:async p=>{const r=teamJudge(p);if(p.state.stage==='route')r.answers.q0.confidence=.4;else r.answers.q0_fit.noul=.4;return r;},draft:async()=>({fills:[{...nameProposal,value}]}),apply:async(f,v,m)=>{written=v;meta=m;return {ok:true}}});
+ assert.equal(written,value==='陈晓'?'陈晓':null);assert.equal(result[0].status,value==='陈晓'?'filled_review':'needs_review');if(meta)assert.equal(meta.uncertain,true);
+ }
+});
+test('rejected answers inform the next extraction and cannot refill even if both models approve',async()=>{
+ const rejections=confirmationFacts([{...teamFields[0],value:'陈晓'}],'example.test');let feedback;
+ const result=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:[],fillUncertain:true,rejectedAnswers:rejections,assertFresh:async()=>{},judge:async p=>teamJudge(p),draft:async(f,w)=>{feedback=w.feedback;return {fills:[nameProposal]}},apply:()=>{throw Error('rejected answer filled')}});
+ assert.match(result[0].reason,/USER_REJECTED/);assert(feedback[0].problems.some(x=>x.includes('用户已拒绝')));
+});
+test('low confidence option still leaves no-material fields empty',async()=>{
+ const result=await runCollaboration({fields:[teamFields[2]],sources:teamSources,entries:[],fillUncertain:true,assertFresh:async()=>{},judge:async p=>teamJudge(p),draft:()=>{throw Error('no source')},apply:()=>{throw Error('no write')}});
+ assert.match(result[0].reason,/ROUTE_NONE/);
+});

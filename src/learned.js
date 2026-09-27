@@ -1,4 +1,4 @@
-import {BASE_FIELDS,RECORD_FIELDS,normalize} from './core.js';
+import {BASE_FIELDS,RECORD_FIELDS,normalize,defaultFieldValue} from './core.js';
 import {fieldRecord} from './material-index.js';
 export const LEARN_CATEGORIES={base:'个人基本信息',education:'教育经历',internship:'实习经历',work:'工作经历',project:'项目经验',language:'外语能力',family:'家庭关系',skills:'个人能力 / 自我评价',awards:'获奖经历',other:'其他信息'};
 const privateLabel=/证件|身份证|护照|准考证|成绩单编号|家庭|父亲|母亲/;
@@ -14,8 +14,8 @@ export function learningCategory(field){
 }
 function definitions(category){
  const time=[['start','开始日期',['开始时间','开始日期','起始时间','入学时间','入职时间','start date']],['end','结束日期',['结束时间','结束日期','毕业时间','离职时间','end date']]];
- if(category==='base')return [...BASE_FIELDS,['degree','最高学历',['学历','最高学历']],['city','现居城市',['现居住地','所在地']],['phone','手机号',['移动电话']]];
- if(category==='education')return [...RECORD_FIELDS.education,...time];
+ if(category==='base')return [...BASE_FIELDS,['degree','最高学历',['学历','最高学历']],['graduationDate','毕业时间',['毕业时间','毕业日期']],['city','现居城市',['现居住地','所在地']],['phone','手机号',['移动电话']]];
+ if(category==='education')return [...RECORD_FIELDS.education,...time,['college','学院',['学院','学院名称','所在学院']]];
  if(['internship','work'].includes(category))return [...RECORD_FIELDS.work,...time,['company','公司',['企业名称','单位名称','实习公司']],['title','职位',['职位名称','岗位','实习岗位']],['description','工作内容',['工作职责','工作描述','实习内容','实习描述']]];
  if(category==='project')return [...time,['name','项目名称',['项目名称']],['responsibilities','项目职责',['项目职责','项目中职责']],['description','项目描述',['项目描述','项目介绍']]];
  if(category==='skills')return [['description','个人能力',['个人技能','个人能力','专业技能','自我评价','评价内容']]];
@@ -23,7 +23,7 @@ function definitions(category){
 }
 export function learningProperty(label,category,datePart){
  if(datePart&&datePart.boundary!=='single')return datePart.boundary+'.'+datePart.unit;
- label=String(label||'');const norm=normalize(label.replace(/[（(][^）)]*[）)]/g,''));
+ label=String(label||'');const norm=normalize(label.replace(/[（(][^）)]*[）)]/g,'').replace(/[?？]+$/g,''));
  const match=definitions(category).find(([key,title,aliases])=>[title,...aliases].some(x=>normalize(x)===norm));
  return match?.[0]||'label:'+normalize(label);
 }
@@ -66,4 +66,20 @@ export function preferredLearned(field,sources){
 export function learnedSourceAllowed(field,source){
  if(!source.learned)return true;const slot=learningSlot(field),fact=source.learned;
  return fact.category===slot.category&&fact.record===slot.record&&(fact.category!=='other'||normalize(fact.section)===normalize(slot.section));
+}
+
+// Explicit feedback is saved as a site-scoped fact, never as a fabricated model score.
+export function confirmationFacts(items,host){
+ const facts=items.map((field,i)=>{
+  const value=defaultFieldValue(field,field.value);
+  if(!field.supported||value===null||!String(value).trim()||field.maxLength>0&&String(value).length>field.maxLength)throw Error('确认内容为空、过长或不符合网页格式，请先修改。');
+  const label=field.options?.find(o=>!o.disabled&&o.value===value)?.label;
+  return {...learningSlot(field),id:'confirmation-'+i,label:field.label,value:label||String(value),host,scope:'site',datePart:field.datePart,enabled:true};
+ });
+ return mergeLearnedFacts([],facts);
+}
+
+export function rejectedForField(field,facts){return facts.filter(f=>key(f)===key(learningSlot(field)));}
+export function wasRejected(field,value,facts){
+ return rejectedForField(field,facts).some(f=>defaultFieldValue(field,f.value)===value);
 }

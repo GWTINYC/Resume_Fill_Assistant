@@ -76,3 +76,5 @@ export const materialsSnapshot=items=>JSON.stringify(items.map(({id,name,text,sa
 
 export async function getLearnedFacts(){const {learnedFacts=[]}=await chrome.storage.local.get('learnedFacts');return validateLearnedFacts(learnedFacts);}
 export async function setLearnedFacts(facts){await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.storage.local.set({learnedFacts:validateLearnedFacts(facts)});}
+
+export async function getRejectedAnswers(){const {rejectedAnswers=[]}=await chrome.storage.local.get('rejectedAnswers');return validateLearnedFacts(rejectedAnswers);}

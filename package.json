@@ -1,6 +1,6 @@
 {
   "name": "jev-apply",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -19,7 +19,8 @@
     "test:native-keys": "node tests/native-keys.browser.mjs",
     "test:complex-select": "node tests/complex-select.browser.mjs",
     "test:beisen-controls": "node tests/beisen-controls.browser.mjs",
-    "test:manual": "node tests/manual.browser.mjs"
+    "test:manual": "node tests/manual.browser.mjs",
+    "test:feedback": "node tests/feedback.browser.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "^6.3.289"

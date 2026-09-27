@@ -1,20 +1,20 @@
 import {pcKeyHint} from './native-keys.js';
-import {captureDraft,LEARN_CATEGORIES,learningProperty,factKey,learnedEntries,preferredLearned,learnedSourceAllowed} from './learned.js';
+import {mergeLearnedFacts,confirmationFacts,captureDraft,LEARN_CATEGORIES,learningProperty,factKey,learnedEntries,preferredLearned,learnedSourceAllowed} from './learned.js';
 import {routeExperienceFields} from './experience-routing.js';
 import {ensureRecordSlots} from './record-slots.js';
 import {runCollaboration} from './collaboration.js';
-import {getApiKey,setApiKey,clearApiKey,getProvider,setProvider,listMaterials,materialsSnapshot,getLearnedFacts,connectPcKeys} from './storage.js';
+import {getApiKey,setApiKey,clearApiKey,getProvider,setProvider,listMaterials,materialsSnapshot,getRejectedAnswers,getLearnedFacts,connectPcKeys} from './storage.js';
 import {profileEntries,localMapping,defaultFieldValue,mappingPayload,optionPayload,acceptedChoice} from './core.js';
 import {applicantSources,DEEPSEEK_MODEL} from './deepseek.js';
 const $=id=>document.getElementById(id);
 let experienceCategories=[],recordSections=[],entries=[],fields=[],plan=new Map(),tabId,token,profileSnapshot='',materialSnapshot='',savedProfile={},materials=[],provider='jev',busy=false,pageContext={},collaborationController=null;
-let learnedFacts=[],learnedSnapshot='',learningDraft=[];
+let pageHost='',learnedFacts=[],learnedSnapshot='',learningDraft=[],rejectedAnswers=[],rejectedSnapshot='';
 const usage={jev:0,deepseekInput:0,deepseekOutput:0};
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
-function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite','connect-pc-keys'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea,button'))el.disabled=value||el.dataset.unsupported==='true';}
+function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','confirm-fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite','fill-uncertain','connect-pc-keys'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea,button'))el.disabled=value||el.dataset.unsupported==='true';}
 async function message(data){const r=await chrome.runtime.sendMessage(data);if(!r?.ok)throw Error(r?.error||'扩展未响应，请重新加载');return r;}
 async function profile(host){
- const {profile}=await chrome.storage.local.get('profile');savedProfile=profile||{};entries=profileEntries(savedProfile);profileSnapshot=JSON.stringify(savedProfile);materials=await listMaterials();materialSnapshot=materialsSnapshot(materials);learnedFacts=await getLearnedFacts();learnedSnapshot=JSON.stringify(learnedFacts);entries.push(...learnedEntries(learnedFacts,host));
+ const {profile}=await chrome.storage.local.get('profile');savedProfile=profile||{};entries=profileEntries(savedProfile);profileSnapshot=JSON.stringify(savedProfile);materials=await listMaterials();materialSnapshot=materialsSnapshot(materials);learnedFacts=await getLearnedFacts();learnedSnapshot=JSON.stringify(learnedFacts);rejectedAnswers=await getRejectedAnswers();rejectedSnapshot=JSON.stringify(rejectedAnswers);entries.push(...learnedEntries(learnedFacts,host));
  $('profile-info').textContent=`已保存 ${entries.length} 项资料、${materials.length} 份素材、${learnedFacts.length} 项学习资料${savedProfile.notes?'，含补充备注':''} · PDF / TXT 在本机保留`;
 }
 async function keyStatus(){
@@ -34,12 +34,14 @@ function providerUI(){
 function setEntry(field,id,source='手动选择',checked=true){
  const e=entries.find(x=>x.id===id);const value=e?defaultFieldValue(field,e.value):null;
  plan.set(field.id,{entryId:id||'',value,source,checked:!!e&&value!==null&&field.supported&&(!field.hasValue||$('overwrite').checked)&&checked});
+ if(field.hasValue&&field.reviewValue!==undefined){const rejected=field.reviewMark==='rejected';plan.set(field.id,{entryId:'',value:field.reviewValue,filledValue:field.reviewValue,ai:true,checked:false,pendingConfirmation:!rejected,source:rejected?'用户已拒绝':'已填入 · 低置信待确认',result:rejected?'请修改或清除网页值，也可采用网页修改并记住。':'上次已填入，尚未确认。'});}
 }
 function render(){
  $('preview').hidden=!fields.length;$('fields').replaceChildren();
  for(const f of fields){
-  const p=plan.get(f.id)||{entryId:'',value:null,checked:false};const card=document.createElement('div');card.className='field';
+  const p=plan.get(f.id)||{entryId:'',value:null,checked:false};const card=document.createElement('div');card.className='field';if(p.pendingConfirmation)card.classList.add('needs-confirmation');
   const heading=document.createElement('label');heading.className='check';const check=document.createElement('input');check.type='checkbox';check.checked=p.checked;check.disabled=!f.supported||p.value===null||busy;check.dataset.unsupported=String(!f.supported||p.value===null);check.setAttribute('aria-label',`填入 ${f.label}`);check.addEventListener('change',()=>{p.checked=check.checked;updateCount();});const title=document.createElement('span');title.className='field-title';title.textContent=f.label;heading.append(check,title);card.append(heading);
+  if(f.reviewMark==='rejected'&&p.source==='用户已拒绝')card.classList.add('rejected-answer');
   const meta=document.createElement('div');meta.className='field-meta';meta.textContent=[f.context,f.type,f.required?'必填':'',f.hasValue?'已有内容':'',p.source||'未匹配'].filter(Boolean).join(' · ');card.append(meta);
   if(f.supported){const select=document.createElement('select');select.setAttribute('aria-label',`${f.label} 对应的资料项`);select.append(new Option('— 不填 / 选择资料项 —',''));for(const e of entries)select.append(new Option(e.label,e.id));if(p.ai)select.append(new Option('DeepSeek 建议（可编辑）','__deepseek__'));select.value=p.ai?'__deepseek__':p.entryId;select.disabled=busy;select.addEventListener('change',()=>{if(select.value!=='__deepseek__')setEntry(f,select.value);render();});card.append(select);}
   if(p.ai&&f.supported){
@@ -48,6 +50,12 @@ function render(){
     else editor.maxLength=10000;
     editor.value=p.value??'';editor.onchange=()=>{p.value=defaultFieldValue(f,editor.value);p.source='手动修改 DeepSeek 建议';p.edited=true;p.result=undefined;if(p.auditDescription)p.auditDescription='已手动修改，当前值尚未经过双 AI 校核';if(p.value===null||p.value===''){p.value=null;p.checked=false;}render();};card.append(editor);
   }else{const value=document.createElement('div');value.className='value';if(!f.supported)value.textContent=f.reason;else if(p.value!==null){const label=f.options?.find(x=>x.value===p.value)?.label;value.textContent=label?`${label}（${p.value}）`:String(p.value);}else value.textContent=p.entryId?'无法直接匹配网页格式或选项，可使用智能匹配或手动填写网页。':'尚无待填内容。';card.append(value);}
+  if(f.supported&&p.value!==null&&p.value!==undefined){
+    const confirm=document.createElement('button');confirm.className='small';confirm.textContent=p.filledValue?'接受此项并记住':'确认此项并填入、记住';confirm.disabled=busy;
+    confirm.setAttribute('aria-label',`${f.label} 确认并记住`);confirm.onclick=()=>fillSelected({remember:true,ids:[f.id]});card.append(confirm);
+    if(p.filledValue){const current=document.createElement('button');current.className='small';current.textContent='采用网页修改并记住';current.setAttribute('aria-label',`${f.label} 采用网页修改`);current.disabled=busy;current.onclick=()=>acceptPageEdit(f);card.append(current);}
+    if(p.ai){const reject=document.createElement('button');reject.className='small danger';reject.textContent='拒绝此答案';reject.disabled=busy;reject.setAttribute('aria-label',`${f.label} 拒绝此答案`);reject.onclick=()=>rejectAnswer(f);card.append(reject);}
+  }
   if(f.supported){
     const manual=document.createElement('details'),summary=document.createElement('summary');summary.textContent='直接指定并填入此项';manual.append(summary);
     const note=document.createElement('p');note.className='muted';note.textContent='使用你已确认的值，不调用模型；仍检查控件格式、已有内容和填写结果。';manual.append(note);
@@ -62,7 +70,7 @@ function render(){
   $('fields').append(card);
  }updateCount();
 }
-function updateCount(){const count=[...plan.values()].filter(x=>x.checked&&x.value!==null).length;$('count').textContent=`${count} / ${fields.length} 项已勾选`;$('fill').disabled=busy||!count;}
+function updateCount(){const count=[...plan.values()].filter(x=>x.checked&&x.value!==null).length;$('count').textContent=`${count} / ${fields.length} 项已勾选`;$('fill').disabled=busy||!count;$('confirm-fill').disabled=busy||!count;}
 function showUsage(){const parts=[];if(usage.jev)parts.push(`Jev 输入 ${usage.jev.toLocaleString()} token · 估算 $${(usage.jev*.042/1e6).toFixed(6)}`);if(usage.deepseekInput||usage.deepseekOutput)parts.push(`DeepSeek 输入 ${usage.deepseekInput.toLocaleString()} / 输出 ${usage.deepseekOutput.toLocaleString()} token`);$('usage').textContent=parts.join('；');}
 $('edit-profile').onclick=()=>chrome.runtime.openOptionsPage();
 function renderLearning(){
@@ -98,7 +106,7 @@ $('connect-pc-keys').onclick=async()=>{lock(true);try{await connectPcKeys();awai
 async function scanCurrent(resetOverwrite=true){
  const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!tab?.id||!/^https?:/.test(tab.url||''))throw Error('请打开普通 http/https 网申页面并点击扩展图标；浏览器设置页、PDF 预览和扩展页无法扫描。');
  await profile(new URL(tab.url).hostname);
- const r=await message({action:'scan',tabId:tab.id});tabId=tab.id;token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();if(resetOverwrite)$('overwrite').checked=false;
+ const r=await message({action:'scan',tabId:tab.id});tabId=tab.id;pageHost=r.host;token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();if(resetOverwrite)$('overwrite').checked=false;
  for(const f of fields)setEntry(f,preferredLearned(f,entries).at(0)||localMapping(f,entries.filter(e=>learnedSourceAllowed(f,e)))||'','本地名称匹配');
  $('page-info').textContent=`${new URL(tab.url).hostname} · ${fields.length} 个可见字段 · ${r.frameCount} 个可访问框架`;
  status(fields.length?`扫描完成。可一键协作填写，也可使用单模型或手动操作。${r.atLimit?' 单个框架最多扫描 100 项，请分步处理。':''}${r.limited?' 部分框架不可访问。':''}`:'没有找到可见表单。自定义控件、跨域框架或 Shadow DOM 可能需要网站专用适配。');render();
@@ -133,21 +141,60 @@ $('match').onclick=async()=>{lock(true);try{
  if(provider==='deepseek')await matchDeepseek();else await matchJev();
  }catch(e){status(e.message+' 已完成的匹配会保留，请核对后再使用。',true);}finally{lock(false);render();showUsage();}};
 $('overwrite').onchange=()=>{if(!$('overwrite').checked)for(const f of fields)if(f.hasValue)plan.get(f.id).checked=false;render();};
-$('fill').onclick=async()=>{lock(true);try{
+async function fillSelected({remember=false,ids=null}={}){lock(true);try{
  const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==tabId)throw Error('当前标签页与预览不一致，请在目标页面重新扫描。');
- const {profile}=await chrome.storage.local.get('profile');if(JSON.stringify(profile||{})!==profileSnapshot)throw Error('个人资料已更新，请重新扫描以刷新预览。');
+ const {profile:storedProfile}=await chrome.storage.local.get('profile');if(JSON.stringify(storedProfile||{})!==profileSnapshot)throw Error('个人资料已更新，请重新扫描以刷新预览。');
+ if(JSON.stringify(await getRejectedAnswers())!==rejectedSnapshot)throw Error('反馈已变化，请重新扫描。');
  if(JSON.stringify(await getLearnedFacts())!==learnedSnapshot)throw Error('已学习资料发生变化，请重新扫描。');
- const items=fields.filter(f=>plan.get(f.id)?.checked&&plan.get(f.id)?.value!==null).map(f=>({...f,value:plan.get(f.id).value}));if(!items.length)throw Error('请勾选要填入的字段。');
+ const items=fields.filter(f=>(ids?ids.includes(f.id):plan.get(f.id)?.checked)&&plan.get(f.id)?.value!==null).map(f=>({...f,value:plan.get(f.id).value}));if(!items.length)throw Error('请勾选要填入的字段。');
  if(items.some(f=>plan.get(f.id)?.ai)&&materialsSnapshot(await listMaterials())!==materialSnapshot)throw Error('简历素材或使用设置已变化，请重新扫描并识别。');
- const r=await message({action:'fill',tabId,token,overwrite:$('overwrite').checked,items});const written=items.filter(item=>r.results.some(x=>x.id===item.id&&x.ok));if(written.length){await new Promise(resolve=>setTimeout(resolve,250));const check=await message({action:'verify',tabId,token,items:written});for(const result of r.results)if(result.ok){const verified=check.results?.find(x=>x.id===result.id);result.ok=verified?.ok===true;result.reason=verified?.reason||'无法核验网页值，请手动检查';}}for(const x of r.results){const p=plan.get(x.id);if(p){p.result=x.reason;p.checked=false;}}
- status(`已填入 ${r.results.filter(x=>x.ok).length} 项，跳过或失败 ${r.results.filter(x=>!x.ok).length} 项。请检查网页上的内容及校验提示，再自行继续网申。`);
- }catch(e){status(e.message,true);}finally{lock(false);render();}};
+ if(remember)mergeLearnedFacts(learnedFacts,confirmationFacts(items,new URL(tab.url).hostname));
+ const r={results:[]};
+ for(const item of items){
+  const p=plan.get(item.id);let result,overwrite=$('overwrite').checked;
+  if(remember&&p.filledValue){
+   const current=await message({action:'verify',tabId,token,items:[item]});result=current.results?.find(x=>x.id===item.id);
+   if(!result?.ok&&p.edited){
+    const before=await message({action:'verify',tabId,token,items:[{...item,value:p.filledValue}]});
+    if(!before.results?.find(x=>x.id===item.id)?.ok)throw Error('网页已被你修改，请重新扫描后确认，避免覆盖新内容。');
+    overwrite=true;result=null;
+   }
+  }
+  if(!result){const response=await message({action:'fill',tabId,token,overwrite,items:[item]});result=response.results?.find(x=>x.id===item.id);}
+  r.results.push(result||{id:item.id,ok:false,reason:'网页未返回填写结果'});
+ }
+ const written=items.filter(item=>r.results.some(x=>x.id===item.id&&x.ok));
+ if(written.length){await new Promise(resolve=>setTimeout(resolve,250));const check=await message({action:'verify',tabId,token,items:written});for(const result of r.results)if(result.ok){const verified=check.results?.find(x=>x.id===result.id);result.ok=verified?.ok===true;result.reason=verified?.reason||'无法核验网页值，请手动检查';}}
+ for(const x of r.results){const p=plan.get(x.id);if(p){p.result=x.reason;p.checked=false;if(x.ok)p.filledValue=items.find(i=>i.id===x.id).value;}if(x.ok){const f=fields.find(f=>f.id===x.id);if(f)f.hasValue=true;}}
+ let remembered=0;if(remember){const successful=items.filter(item=>r.results.some(x=>x.id===item.id&&x.ok));if(successful.length){try{const result=await message({action:'save-learning',facts:confirmationFacts(successful,new URL(tab.url).hostname)});remembered=result.count;for(const item of successful){const p=plan.get(item.id);p.pendingConfirmation=false;p.source='用户已接受并记住';p.auditDescription='用户确认 · 下次同网站、同类目、同经历优先使用';}await message({action:'mark-review',tabId,token,items:successful.map(f=>({...f,mark:''}))});await profile(new URL(tab.url).hostname);}catch(e){throw Error('网页已填入，但本地记忆保存失败：'+e.message+'；请重新扫描或读取已填页面后保存。');}}}
+ status(`已填入 ${r.results.filter(x=>x.ok).length} 项，跳过或失败 ${r.results.filter(x=>!x.ok).length} 项。${remember?`已记住 ${remembered} 项，仅用于当前网站的同类目、同经历字段；可在资料页编辑、停用或删除。`:''}请检查网页上的内容及校验提示，再自行继续网申。`);
+ }catch(e){status(e.message,true);}finally{lock(false);render();}}
+$('fill').onclick=()=>fillSelected();
+$('confirm-fill').onclick=()=>fillSelected({remember:true});
+async function acceptPageEdit(field){lock(true);try{
+ const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==tabId)throw Error('当前标签页与预览不一致，请重新扫描。');
+ const r=await message({action:'read-current',tabId,token,items:[field]}),current=r.results?.find(x=>x.id===field.id);if(!current?.ok)throw Error(current?.reason||'无法读取网页值');
+ confirmationFacts([{...field,value:current.value}],new URL(tab.url).hostname);
+ const p=plan.get(field.id);p.value=current.value;p.filledValue=current.value;p.edited=true;
+ }catch(e){status(e.message,true);lock(false);render();return;}lock(false);await fillSelected({remember:true,ids:[field.id]});
+}
+async function rejectAnswer(field){lock(true);try{
+ const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==tabId)throw Error('当前标签页与预览不一致，请重新扫描。');
+ const p=plan.get(field.id),value=p.filledValue||p.value;
+ const [fact]=confirmationFacts([{...field,value}],new URL(tab.url).hostname);
+ await message({action:'reject-answer',fact});await profile(new URL(tab.url).hostname);
+ p.checked=false;p.pendingConfirmation=false;p.result='已记住拒绝：下次不会自动填这个答案。'+(p.filledValue?'网页仍保留原值，请手动修改或清除；也可在侧栏修改后接受。':'');
+ p.source='用户已拒绝';
+ if(p.filledValue)await message({action:'mark-review',tabId,token,items:[{...field,value,mark:'rejected'}]});
+ status(p.result+' 可在资料页撤销拒绝。');
+ }catch(e){status(e.message,true);}finally{lock(false);render();}}
 function showCollaboration(progress){
  for(const record of progress.records){
   if(!record.proposal){const current=plan.get(record.fieldId);if(current){current.checked=false;current.result=record.status==='needs_review'?record.reason:undefined;}continue;}
-  const labels={checking:'等待 Jev 校核',approved:'Jev 校核通过',needs_review:'需人工核对',filled:'协作已填入',failed:'网页核验未通过'};
-  const p={entryId:'',value:record.proposal.value,source:labels[record.status]||'协作草案',ai:true,evidence:record.proposal.evidence,reason:record.proposal.reason,checked:false,result:record.reason};
-  if(record.review){const r=record.review;p.auditDescription=r.method==='confirmed'?'本地确定性核验：字段与经历身份一致，值来自已确认资料，原文与格式有效':`${r.policy==='passage'?'原文段落':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核栏目对应、原文完整性和素材冲突':'Jev 校核存在疑问'}${record.route?' · Jev 定位：'+record.route.label+(record.route.record?' 第 '+record.route.record+' 条':''):''}${record.history.at(-1)?.round>1?' · 已修正复核':''}`;}
+  const labels={checking:'等待 Jev 校核',approved:'Jev 校核通过',needs_review:'需人工核对',filled:'协作已填入',filled_review:'已填入 · 低置信待确认',failed:'网页核验未通过'};
+  const p={entryId:'',value:record.proposal.value,source:labels[record.status]||'协作草案',ai:true,evidence:record.proposal.evidence,reason:record.proposal.reason,checked:false,result:record.reason,pendingConfirmation:record.status==='filled_review',filledValue:['filled','filled_review'].includes(record.status)?record.proposal.value:null};
+  if(p.filledValue){const field=fields.find(f=>f.id===record.fieldId);if(field)field.hasValue=true;}
+  if(record.review){const r=record.review;p.auditDescription=r.method==='confirmed'?'本地确定性核验：字段与经历身份一致，值来自已确认资料，原文与格式有效':`${r.policy==='passage'?'原文段落':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核栏目对应、原文完整性和素材冲突':'Jev 校核存在疑问'}${record.route?' · Jev 定位：'+record.route.label+(record.route.uncertain?'（范围置信度 '+record.route.confidence.toFixed(2)+'，待确认）':'')+(record.route.record?' 第 '+record.route.record+' 条':''):''}${record.history.at(-1)?.round>1?' · 已修正复核':''}`;}
   plan.set(record.fieldId,p);
  }
  status(progress.message);render();showUsage();
@@ -160,17 +207,17 @@ $('collaborate').onclick=async()=>{
   if(controller.signal.aborted)throw new DOMException('协作已停止','AbortError');
   await scanCurrent(false);const sources=applicantSources(entries,savedProfile,materials);if(!sources.length)throw Error('请先导入素材或保存个人资料，再启动协作。');
   const overwrite=$('overwrite').checked;
-  const assertFresh=async()=>{if(controller.signal.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==tabId)throw Error('当前标签页已切换，已停止协作填写。');const {profile}=await chrome.storage.local.get('profile');if(JSON.stringify(profile||{})!==profileSnapshot||materialsSnapshot(await listMaterials())!==materialSnapshot||JSON.stringify(await getLearnedFacts())!==learnedSnapshot)throw Error('个人资料或素材已变化，请重新启动协作。');};
+  const assertFresh=async()=>{if(controller.signal.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==tabId)throw Error('当前标签页已切换，已停止协作填写。');const {profile}=await chrome.storage.local.get('profile');if(JSON.stringify(profile||{})!==profileSnapshot||materialsSnapshot(await listMaterials())!==materialSnapshot||JSON.stringify(await getLearnedFacts())!==learnedSnapshot||JSON.stringify(await getRejectedAnswers())!==rejectedSnapshot)throw Error('个人资料或素材已变化，请重新启动协作。');};
   const prepared=await ensureRecordSlots({sources,sections:recordSections,fields,knownCategories:experienceCategories,assertFresh,onProgress:text=>status(text),
     add:(section,target)=>message({action:'add-record',tabId,token,frameId:section.frameId,sectionId:section.localId,target}),
     rescan:async()=>{const r=await message({action:'scan',tabId});token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();for(const f of fields)setEntry(f,preferredLearned(f,entries).at(0)||localMapping(f,entries.filter(e=>learnedSourceAllowed(f,e)))||'','新增后重新扫描');render();return recordSections;}
   });
-  const result=await runCollaboration({fields,sources,entries,pageContext,overwrite,signal:controller.signal,assertFresh,onProgress:showCollaboration,
+  const result=await runCollaboration({fields,sources,entries,pageContext,overwrite,fillUncertain:$('fill-uncertain').checked,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),signal:controller.signal,assertFresh,onProgress:showCollaboration,
     draft:async(batch,workflow)=>{const r=await message({action:'deepseek-fill',fields:batch,sources,workflow});usage.deepseekInput+=r.usage?.prompt_tokens||0;usage.deepseekOutput+=r.usage?.completion_tokens||0;return r;},
     judge:async payload=>{const r=await message({action:'evaluate',payload});usage.jev+=r.usage?.input_tokens||0;return r;},
-    apply:async(f,value)=>{const items=[{...f,value}];const written=await message({action:'fill',tabId,token,overwrite,items});const first=written.results?.find(x=>x.id===f.id);if(!first?.ok)return {ok:false,reason:first?.reason||'网页未返回填写结果'};await new Promise(resolve=>setTimeout(resolve,250));const verified=await message({action:'verify',tabId,token,items});return verified.results?.find(x=>x.id===f.id)||{ok:false,reason:'无法核验网页值，请手动检查'};}
+    apply:async(f,value,{uncertain})=>{const items=[{...f,value}];const written=await message({action:'fill',tabId,token,overwrite,items});const first=written.results?.find(x=>x.id===f.id);if(!first?.ok)return {ok:false,reason:first?.reason||'网页未返回填写结果'};await new Promise(resolve=>setTimeout(resolve,250));const verified=await message({action:'verify',tabId,token,items});const result=verified.results?.find(x=>x.id===f.id)||{ok:false,reason:'无法核验网页值，请手动检查'};if(result.ok&&uncertain)await message({action:'mark-review',tabId,token,items:[{...f,value,mark:'uncertain'}]});return result;}
   });
-  const count=state=>result.filter(x=>x.status===state).length;status(`协作完成：已填入并核验 ${count('filled')} 项，待人工核对 ${count('needs_review')} 项，填写失败 ${count('failed')} 项，跳过 ${count('skipped')} 项。${prepared.added?`已自动新增 ${prepared.added} 组经历。`:""}已保留出处与校核结果，请检查后自行提交。`);
+  const count=state=>result.filter(x=>x.status===state).length;status(`协作完成：已填入并核验 ${count('filled')+count('filled_review')} 项${count('filled_review')?`（其中 ${count('filled_review')} 项低置信，已标橙待确认）`:''}，待人工核对 ${count('needs_review')} 项，填写失败 ${count('failed')} 项，跳过 ${count('skipped')} 项。${prepared.added?`已自动新增 ${prepared.added} 组经历。`:""}已保留出处与校核结果，请检查后自行提交。`);
  }catch(e){status(e.message+(e.name==='AbortError'?'':' 尚未执行的字段不会自动填入。'),e.name!=='AbortError');}
  finally{collaborationController=null;lock(false);for(const p of plan.values())p.checked=false;render();showUsage();await keyStatus();}
 };

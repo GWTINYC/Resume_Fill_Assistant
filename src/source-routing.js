@@ -66,11 +66,12 @@ export function routingPackets(fields,sources,feedback=[]){
  if(packets.length>80)throw Error('[ROUTE_LIMIT] 字段与素材范围过多，请减少本次启用素材或分段填写。');
  return {ranges,packets};
 }
-export function readRouteDecisions(packet,answers){
+export function readRouteDecisions(packet,answers,allowUncertain=false){
  return packet.active.map(({field,candidates},i)=>{
   const answer=answers?.['q'+i],id=acceptedChoice(answer,candidates,.85);
   if(id)return {fieldId:field.id,rangeId:id,confidence:answer.confidence};
   const valid=answer?.type==='choice'&&[...candidates,'none'].includes(answer.choice)&&Number.isFinite(answer.confidence)&&Number.isFinite(answer.probabilities?.[answer.choice]);
+  if(allowUncertain&&valid&&candidates.includes(answer.choice)&&answer.confidence>=0&&answer.confidence<=1&&answer.probabilities[answer.choice]>=0&&answer.probabilities[answer.choice]<=1)return {fieldId:field.id,rangeId:answer.choice,confidence:answer.confidence,uncertain:true};
   const reason=!valid?'[ROUTE_RESPONSE] Jev 范围判断缺少有效结果。':answer.choice==='none'?'[ROUTE_NONE] Jev 判断候选范围没有足够资料，未进入内容提取。':`[ROUTE_LOW_CONFIDENCE] Jev 找到了候选范围，但未达到审核门槛（置信度 ${answer.confidence.toFixed(2)}，选项概率 ${answer.probabilities[answer.choice].toFixed(2)}，门槛 0.85）。`;
   return {fieldId:field.id,reason};
  });
