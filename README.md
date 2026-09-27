@@ -1,8 +1,12 @@
-# Resume Fill Assistant · Jev Apply（0.10.0 原型）
+# Resume Fill Assistant · Jev Apply（0.10.1 原型）
 
 Chrome / Edge 浏览器扩展：在本机保存简历与个人资料，用 **DeepSeek 或 Jev** 识别网申字段，支持有依据的建议先填入、低置信标记及用户反馈学习，也保留单模型预览与手动填写。
 
 [下载最新版插件](https://github.com/GWTINYC/Resume_Fill_Assistant/releases/latest/download/jev-apply-extension.zip) · [版本发布记录](https://github.com/GWTINYC/Resume_Fill_Assistant/releases)
+
+## 0.10.1：结果区只显示橙色预警
+
+一键填写过程及完成后仅展示橙色待确认项。正常填入、已有内容、未匹配和失败项不再全量列成卡片，完成数量与失败数量保留在汇总提示中。接受、修改后确认或拒绝后立即移出列表；没有剩余预警时显示明确空状态。批量确认只作用于可见预警，隐藏项目不会被顺带填入。手动扫描和单模型填写仍保留完整预览，方便按需处理剩余字段。
 
 ## 0.10.0：先填低置信建议，再由你反馈
 

@@ -8,7 +8,7 @@ import {profileEntries,localMapping,defaultFieldValue,mappingPayload,optionPaylo
 import {applicantSources,DEEPSEEK_MODEL} from './deepseek.js';
 const $=id=>document.getElementById(id);
 let experienceCategories=[],recordSections=[],entries=[],fields=[],plan=new Map(),tabId,token,profileSnapshot='',materialSnapshot='',savedProfile={},materials=[],provider='jev',busy=false,pageContext={},collaborationController=null;
-let pageHost='',learnedFacts=[],learnedSnapshot='',learningDraft=[],rejectedAnswers=[],rejectedSnapshot='';
+let reviewOnly=false,pageHost='',learnedFacts=[],learnedSnapshot='',learningDraft=[],rejectedAnswers=[],rejectedSnapshot='';
 const usage={jev:0,deepseekInput:0,deepseekOutput:0};
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
 function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','confirm-fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite','fill-uncertain','connect-pc-keys'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea,button'))el.disabled=value||el.dataset.unsupported==='true';}
@@ -38,12 +38,18 @@ function setEntry(field,id,source='手动选择',checked=true){
 }
 function render(){
  $('preview').hidden=!fields.length;$('fields').replaceChildren();
+ $('result-title').textContent=reviewOnly?'3 · 橙色待确认项':'3 · 填写预览';
+ $('result-help').textContent=reviewOnly?'这里只显示橙色预警。接受、修改后确认或拒绝后，该项会从列表移除。未填和失败项请在网页处理。':'核对资料映射与待填值，可编辑后勾选填入。';
+ $('fill').hidden=reviewOnly;
+ const visibleFields=fields.filter(f=>!reviewOnly||plan.get(f.id)?.pendingConfirmation);
+ if(reviewOnly&&!visibleFields.length){const empty=document.createElement('p');empty.className='muted';empty.id='review-empty';empty.textContent=busy?'正在处理，橙色预警项会显示在这里。':'没有橙色待确认项。';$('fields').append(empty);} 
  for(const f of fields){
+  if(reviewOnly&&!plan.get(f.id)?.pendingConfirmation){const hidden=plan.get(f.id);if(hidden)hidden.checked=false;continue;}
   const p=plan.get(f.id)||{entryId:'',value:null,checked:false};const card=document.createElement('div');card.className='field';if(p.pendingConfirmation)card.classList.add('needs-confirmation');
   const heading=document.createElement('label');heading.className='check';const check=document.createElement('input');check.type='checkbox';check.checked=p.checked;check.disabled=!f.supported||p.value===null||busy;check.dataset.unsupported=String(!f.supported||p.value===null);check.setAttribute('aria-label',`填入 ${f.label}`);check.addEventListener('change',()=>{p.checked=check.checked;updateCount();});const title=document.createElement('span');title.className='field-title';title.textContent=f.label;heading.append(check,title);card.append(heading);
   if(f.reviewMark==='rejected'&&p.source==='用户已拒绝')card.classList.add('rejected-answer');
-  const meta=document.createElement('div');meta.className='field-meta';meta.textContent=[f.context,f.type,f.required?'必填':'',f.hasValue?'已有内容':'',p.source||'未匹配'].filter(Boolean).join(' · ');card.append(meta);
-  if(f.supported){const select=document.createElement('select');select.setAttribute('aria-label',`${f.label} 对应的资料项`);select.append(new Option('— 不填 / 选择资料项 —',''));for(const e of entries)select.append(new Option(e.label,e.id));if(p.ai)select.append(new Option('DeepSeek 建议（可编辑）','__deepseek__'));select.value=p.ai?'__deepseek__':p.entryId;select.disabled=busy;select.addEventListener('change',()=>{if(select.value!=='__deepseek__')setEntry(f,select.value);render();});card.append(select);}
+  const meta=document.createElement('div');meta.className='field-meta';meta.textContent=[reviewOnly?(f.context||'').split(' · 同组字段：')[0]:f.context,reviewOnly?'':f.type,f.required?'必填':'',f.hasValue?'已有内容':'',p.source||'未匹配'].filter(Boolean).join(' · ');card.append(meta);
+  if(f.supported&&!reviewOnly){const select=document.createElement('select');select.setAttribute('aria-label',`${f.label} 对应的资料项`);select.append(new Option('— 不填 / 选择资料项 —',''));for(const e of entries)select.append(new Option(e.label,e.id));if(p.ai)select.append(new Option('DeepSeek 建议（可编辑）','__deepseek__'));select.value=p.ai?'__deepseek__':p.entryId;select.disabled=busy;select.addEventListener('change',()=>{if(select.value!=='__deepseek__')setEntry(f,select.value);render();});card.append(select);}
   if(p.ai&&f.supported){
     const editor=document.createElement(f.options?.length?'select':'textarea');editor.setAttribute('aria-label',`${f.label} 待填内容`);editor.disabled=busy;
     if(f.options?.length)for(const o of f.options){const option=new Option(o.label,o.value);option.disabled=o.disabled;editor.append(option);}
@@ -56,7 +62,7 @@ function render(){
     if(p.filledValue){const current=document.createElement('button');current.className='small';current.textContent='采用网页修改并记住';current.setAttribute('aria-label',`${f.label} 采用网页修改`);current.disabled=busy;current.onclick=()=>acceptPageEdit(f);card.append(current);}
     if(p.ai){const reject=document.createElement('button');reject.className='small danger';reject.textContent='拒绝此答案';reject.disabled=busy;reject.setAttribute('aria-label',`${f.label} 拒绝此答案`);reject.onclick=()=>rejectAnswer(f);card.append(reject);}
   }
-  if(f.supported){
+  if(f.supported&&!reviewOnly){
     const manual=document.createElement('details'),summary=document.createElement('summary');summary.textContent='直接指定并填入此项';manual.append(summary);
     const note=document.createElement('p');note.className='muted';note.textContent='使用你已确认的值，不调用模型；仍检查控件格式、已有内容和填写结果。';manual.append(note);
     const input=document.createElement('textarea');input.maxLength=10000;input.value=p.value??'';input.setAttribute('aria-label',`${f.label} 手动待填值`);input.disabled=busy;manual.append(input);
@@ -70,7 +76,7 @@ function render(){
   $('fields').append(card);
  }updateCount();
 }
-function updateCount(){const count=[...plan.values()].filter(x=>x.checked&&x.value!==null).length;$('count').textContent=`${count} / ${fields.length} 项已勾选`;$('fill').disabled=busy||!count;$('confirm-fill').disabled=busy||!count;}
+function updateCount(){const visible=[...plan.values()].filter(x=>!reviewOnly||x.pendingConfirmation),count=visible.filter(x=>x.checked&&x.value!==null).length;$('count').textContent=reviewOnly?`${visible.length} 项待确认 · 已勾选 ${count} 项`:`${count} / ${fields.length} 项已勾选`;$('fill').disabled=busy||!count;$('confirm-fill').disabled=busy||!count;}
 function showUsage(){const parts=[];if(usage.jev)parts.push(`Jev 输入 ${usage.jev.toLocaleString()} token · 估算 $${(usage.jev*.042/1e6).toFixed(6)}`);if(usage.deepseekInput||usage.deepseekOutput)parts.push(`DeepSeek 输入 ${usage.deepseekInput.toLocaleString()} / 输出 ${usage.deepseekOutput.toLocaleString()} token`);$('usage').textContent=parts.join('；');}
 $('edit-profile').onclick=()=>chrome.runtime.openOptionsPage();
 function renderLearning(){
@@ -104,6 +110,7 @@ $('save-key').onclick=async()=>{lock(true);try{const key=$('api-key').value.trim
 $('clear-key').onclick=async()=>{lock(true);try{await clearApiKey(provider);$('api-key').value='';await keyStatus();status('已清除当前服务的密钥，另一服务的密钥保持不变。');}catch(e){await keyStatus();status('清除未完成：'+e.message,true);}finally{lock(false);updateCount();}};
 $('connect-pc-keys').onclick=async()=>{lock(true);try{await connectPcKeys();await keyStatus();status('PC 密钥文件已连接。已迁移浏览器中尚未备份的密钥，或恢复 PC 中已有的密钥。');}catch(e){await keyStatus();status(e.message,true);}finally{lock(false);updateCount();}};
 async function scanCurrent(resetOverwrite=true){
+ reviewOnly=!resetOverwrite;
  const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!tab?.id||!/^https?:/.test(tab.url||''))throw Error('请打开普通 http/https 网申页面并点击扩展图标；浏览器设置页、PDF 预览和扩展页无法扫描。');
  await profile(new URL(tab.url).hostname);
  const r=await message({action:'scan',tabId:tab.id});tabId=tab.id;pageHost=r.host;token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();if(resetOverwrite)$('overwrite').checked=false;
@@ -146,7 +153,7 @@ async function fillSelected({remember=false,ids=null}={}){lock(true);try{
  const {profile:storedProfile}=await chrome.storage.local.get('profile');if(JSON.stringify(storedProfile||{})!==profileSnapshot)throw Error('个人资料已更新，请重新扫描以刷新预览。');
  if(JSON.stringify(await getRejectedAnswers())!==rejectedSnapshot)throw Error('反馈已变化，请重新扫描。');
  if(JSON.stringify(await getLearnedFacts())!==learnedSnapshot)throw Error('已学习资料发生变化，请重新扫描。');
- const items=fields.filter(f=>(ids?ids.includes(f.id):plan.get(f.id)?.checked)&&plan.get(f.id)?.value!==null).map(f=>({...f,value:plan.get(f.id).value}));if(!items.length)throw Error('请勾选要填入的字段。');
+ const items=fields.filter(f=>(!reviewOnly||plan.get(f.id)?.pendingConfirmation)&&(ids?ids.includes(f.id):plan.get(f.id)?.checked)&&plan.get(f.id)?.value!==null).map(f=>({...f,value:plan.get(f.id).value}));if(!items.length)throw Error('请勾选要填入的字段。');
  if(items.some(f=>plan.get(f.id)?.ai)&&materialsSnapshot(await listMaterials())!==materialSnapshot)throw Error('简历素材或使用设置已变化，请重新扫描并识别。');
  if(remember)mergeLearnedFacts(learnedFacts,confirmationFacts(items,new URL(tab.url).hostname));
  const r={results:[]};
