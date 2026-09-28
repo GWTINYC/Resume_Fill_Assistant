@@ -338,3 +338,45 @@ test('low confidence option still leaves no-material fields empty',async()=>{
  const result=await runCollaboration({fields:[teamFields[2]],sources:teamSources,entries:[],fillUncertain:true,assertFresh:async()=>{},judge:async p=>teamJudge(p),draft:()=>{throw Error('no source')},apply:()=>{throw Error('no write')}});
  assert.match(result[0].reason,/ROUTE_NONE/);
 });
+
+test('fast mode fills a long original once, flags it, and skips independent audits',async()=>{
+ const text='完整保留原文、标点和内部空白。\n'.repeat(350).trimEnd(),field={id:'long',label:'个人能力',type:'textarea',supported:true};
+ const sources=[{id:'notes',label:'个人能力',text}];let routes=0,drafts=0;const writes=[];
+ const result=await runCollaboration({fields:[field],sources,entries:[],fastMode:true,fillUncertain:true,assertFresh:async()=>{},judge:async p=>{
+  assert.equal(p.state.stage,'route');routes++;const choice=p.state.ranges[0].id;return {answers:{q0:{type:'choice',choice,confidence:.6,probabilities:{[choice]:.6}}}};
+ },draft:async()=>{drafts++;return {fills:[{fieldId:field.id,value:text,evidence:[{sourceId:'notes',quote:text}]}]}},apply:async(f,v,meta)=>{writes.push({v,meta});return {ok:true}}});
+ assert.equal(routes,1);assert.equal(drafts,1);assert.equal(writes[0].v,text);assert.equal(writes[0].meta.uncertain,true);assert.equal(result[0].status,'filled_review');assert.equal(result[0].review.method,'local');
+});
+test('strict oversized audit isolates one field and still fills its neighbour',async()=>{
+ const text='原文保持。'.repeat(1600),sources=[...teamSources,{id:'long',label:'个人能力',text}],field={...teamFields[1],id:'long'};
+ const proposal={fieldId:'long',value:text,evidence:[{sourceId:'long',quote:text}]};
+ const packets=auditPackets([nameProposal,proposal],[teamFields[0],field],sources);
+ assert.deepEqual(packets.blocked.map(x=>x.fieldId),['long']);assert(packets.length);assert(packets.every(p=>p.ids.length===1&&p.ids[0]==='name'));
+ const writes=[];const result=await runCollaboration({fields:[teamFields[0],field],sources,entries:[],assertFresh:async()=>{},judge:async p=>{
+  if(p.state.stage!=='route')return teamJudge(p);return {answers:Object.fromEntries(p.state.fields.map((f,i)=>{const choice=p.state.ranges.find(r=>r.sourceId===(f.id==='long'?'long':'base.fullName')).id;return ['q'+i,{type:'choice',choice,confidence:1,probabilities:{[choice]:1}}]}))};
+ },draft:async batch=>({fills:batch.map(f=>f.id==='long'?proposal:nameProposal)}),apply:async(f,v)=>{writes.push(f.id);return {ok:true}}});
+ assert.deepEqual(writes,['name']);assert.equal(result[1].auditBlocked,true);assert.match(result[1].reason,/AUDIT_SIZE/);
+});
+test('fast mode blocks paraphrases, missing evidence and previous rejection',async()=>{
+ const rejections=confirmationFacts([{...teamFields[0],value:'陈晓'}],'example.test');
+ const rejected=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:[],fastMode:true,fillUncertain:true,rejectedAnswers:rejections,assertFresh:async()=>{},judge:async p=>teamJudge(p),draft:async()=>({fills:[nameProposal]}),apply:()=>{throw Error('rejected answer filled')}});
+ assert.match(rejected[0].reason,/USER_REJECTED/);
+ for(const proposal of [{...nameProposal,value:'陈晓优秀'}, {...nameProposal,evidence:[{sourceId:'base.fullName',quote:'伪造'}]}]){
+  const result=await runCollaboration({fields:[teamFields[0]],sources:teamSources,entries:[],fastMode:true,fillUncertain:true,assertFresh:async()=>{},judge:async p=>teamJudge(p),draft:async()=>({fills:[proposal]}),apply:()=>{throw Error('invalid answer written')}});
+  assert.equal(result[0].status,'needs_review');
+ }
+});
+test('fast mode rejects an impossible calendar date even when it appears in material',async()=>{
+ const field={id:'birthday',label:'出生日期',type:'date',supported:true},source={id:'notes',label:'出生日期',text:'2023-02-30'};
+ const result=await runCollaboration({fields:[field],sources:[source],entries:[],fastMode:true,fillUncertain:true,assertFresh:async()=>{},judge:async p=>{assert.equal(p.state.stage,'route');const choice=p.state.ranges[0].id;return {answers:{q0:{type:'choice',choice,confidence:1,probabilities:{[choice]:1}}}}},draft:async()=>({fills:[{fieldId:field.id,value:source.text,evidence:[{sourceId:source.id,quote:source.text}]}]}),apply:()=>{throw Error('Impossible date written')}});
+ assert.equal(result[0].status,'needs_review');
+});
+test('oversized pairs split without losing audit coverage or the selected option label',()=>{
+ const text='原文。'.repeat(650),source={id:'notes',label:'描述',text};
+ const fields=[{id:'a',label:'个人能力',type:'textarea'},{id:'b',label:'自我描述',type:'textarea'}];
+ const proposals=fields.map(f=>({fieldId:f.id,value:text,evidence:[{sourceId:'notes',quote:text}]}));
+ const packets=auditPackets(proposals,fields,[source]);assert.equal(packets.blocked.length,0);assert(packets.every(p=>p.ids.length===1));
+ for(const field of fields){const parts=packets.filter(p=>p.ids.includes(field.id));assert.equal(parts.flatMap(p=>p.payload.state.sourcePortion).map(s=>s.text).join(''),text);assert(parts.every(p=>p.payload.state.items[0].evidence[0].quote===text));}
+ const options=Array.from({length:5000},(_,i)=>({value:String(i),label:'选项'+i}));
+ const [packet]=auditPackets([{...nameProposal,value:'42'}],[{...teamFields[0],options}],teamSources);assert.deepEqual(packet.payload.state.items[0].field.options,[options[42]]);
+});
