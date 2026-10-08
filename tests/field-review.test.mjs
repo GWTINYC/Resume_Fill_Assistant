@@ -32,3 +32,9 @@ test('skill name failure blocks proficiency even when proficiency is first in DO
  const result=await runCollaboration({fields,sources:[{id:'notes',text:'Python 熟练'}],entries:[],fastMode:true,fillUncertain:true,planCache:{get:f=>({fieldId:f.id,value:values[f.id],evidence:[{sourceId:'notes',quote:'Python 熟练'}]})},assertFresh:async()=>{},judge:noModel,draft:noModel,apply:async f=>{written.push(f.id);return {ok:false,reason:'name rejected'}}});
  assert.deepEqual(written,['name']);assert.equal(result[0].status,'needs_review');assert.equal(result[0].warning,true);assert.match(result[0].reason,/RELATED_EMPTY/);
 });
+
+test('existing proficiency is flagged when the proposed skill name fails to persist',async()=>{
+ const fields=[field('level','掌握程度','技能 · 第 1 条','熟练'),field('name','技能名称','技能 · 第 1 条')];
+ const result=await runCollaboration({fields,sources:[{id:'notes',text:'Python'}],entries:[],fastMode:true,planCache:{get:f=>({fieldId:f.id,value:'Python',evidence:[{sourceId:'notes',quote:'Python'}]})},assertFresh:async()=>{},judge:noModel,draft:noModel,apply:async()=>({ok:false,reason:'name rejected'})});
+ assert.equal(result[0].status,'needs_review');assert.equal(result[0].warning,true);assert.match(result[0].reason,/RELATED_EMPTY/);assert.equal(result[0].proposal.value,'熟练');
+});

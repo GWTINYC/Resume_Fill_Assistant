@@ -191,6 +191,14 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
   const written=[...records.values()].filter(r=>['filled','filled_review'].includes(r.status));
   if(written.length)await reconcileWritten([...records.values()],await verifyWritten(written.map(r=>({...seenFields.get(r.fieldId),value:r.proposal.value}))),fields,planCache);
  }
+ // Re-evaluate existing dependent values after a proposed peer fails or disappears at readback.
+ for(const [id,issue] of relatedFieldWarnings(fields,records)){
+  const record=records.get(id),field=seenFields.get(id);if(record.ruleWarning===issue.reason)continue;
+  record.warning=true;record.ruleWarning=issue.reason;record.reason=issue.reason;
+  if(['filled','filled_review'].includes(record.status))record.status='filled_review';
+  else if(record.status!=='failed')record.status='needs_review';
+  if(!record.proposal&&field.hasValue)record.proposal={fieldId:id,value:field.currentValue,evidence:[],reason:issue.reason};
+ }
  for(const record of records.values())if(['filled','filled_review'].includes(record.status)&&fastMode&&planCache&&!record.ruleWarning&&record.review?.method!=='confirmed'){
   try{await planCache.put(seenFields.get(record.fieldId),record.proposal);}catch{record.cacheWriteFailed=true;record.reason+=' 本次已填入，但加速记录未保存。';}
  }
