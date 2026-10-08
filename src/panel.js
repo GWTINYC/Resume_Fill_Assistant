@@ -1,3 +1,4 @@
+import {reconcileWritten} from './field-review.js';
 import {createPlanCache,PLAN_CACHE_KEY} from './plan-cache.js';
 import {pcKeyHint} from './native-keys.js';
 import {mergeLearnedFacts,confirmationFacts,captureDraft,LEARN_CATEGORIES,learningProperty,factKey,learnedEntries,preferredLearned,learnedSourceAllowed} from './learned.js';
@@ -10,10 +11,37 @@ import {applicantSources,DEEPSEEK_MODEL} from './deepseek.js';
 const $=id=>document.getElementById(id);
 let experienceCategories=[],recordSections=[],entries=[],fields=[],plan=new Map(),tabId,token,profileSnapshot='',materialSnapshot='',savedProfile={},materials=[],provider='jev',busy=false,pageContext={},collaborationController=null;
 let reviewOnly=false,pageHost='',learnedFacts=[],learnedSnapshot='',learningDraft=[],rejectedAnswers=[],rejectedSnapshot='';
+let watchTimer=null,watchRun=null,watchBusy=false,watchDirty=false;
 const usage={jev:0,deepseekInput:0,deepseekOutput:0};
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
 function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','confirm-fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite','fill-uncertain','connect-pc-keys'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea,button'))el.disabled=value||el.dataset.unsupported==='true';}
 async function message(data){const r=await chrome.runtime.sendMessage(data);if(!r?.ok)throw Error(r?.error||'扩展未响应，请重新加载');return r;}
+function stopWatch(){clearInterval(watchTimer);watchTimer=null;watchRun=null;watchDirty=false;}
+function feedbackResolved(id,value){const record=watchRun?.records.find(r=>r.fieldId===id);if(record){record.feedbackResolved=true;if(value!==undefined){record.proposal.value=value;record.status='filled';record.warning=false;}else record.status='needs_review';}}
+function startWatch(records,cache,summary){
+ stopWatch();const run={records,cache,summary,token,tabId};watchRun=run;
+ watchTimer=setInterval(async()=>{
+  if(busy||watchBusy||watchRun!==run)return;watchBusy=true;
+  try{
+   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==run.tabId)return;
+   const watched=run.records.filter(r=>!r.feedbackResolved&&['filled','filled_review'].includes(r.status));
+   if(watched.length){
+    const items=watched.map(r=>({...fields.find(f=>f.id===r.fieldId),value:r.proposal.value}));
+    const checked=await message({action:'verify',tabId:run.tabId,token:run.token,items});if(watchRun!==run)return;
+    if(checked.results?.length&&checked.results.every(r=>/页面已变化|框架/.test(r.reason||''))){stopWatch();status('页面已变化，已暂停持续核验；请重新扫描后核对，之前的成功统计不代表新页面。',true);return;}
+    if(await reconcileWritten(watched,checked.results||[],fields,cache)){
+     if(watchRun!==run)return;
+     const changed=watched.filter(r=>r.status==='failed');
+     for(const r of changed){const p=plan.get(r.fieldId);if(p)Object.assign(p,{result:r.reason,pendingConfirmation:true,failedReview:true,filledValue:null,source:'网页值发生变化'});}
+     await message({action:'mark-review',tabId:run.tabId,token:run.token,items:changed.map(r=>({...fields.find(f=>f.id===r.fieldId),value:r.proposal.value,mark:'changed'}))});
+     watchDirty=true;status(run.summary()+' 检测到后续变化，成功数已纠正；未自动重填。',true);
+    }
+   }
+   if(watchDirty&&!document.activeElement?.closest('#fields textarea,#fields select,#fields input:not([type=checkbox])')){watchDirty=false;render();}
+  }catch(e){if(watchRun===run){stopWatch();status('持续核验已暂停：'+e.message+'；请检查网页，未自动重填。',true);}}
+  finally{watchBusy=false;}
+ },1500);
+}
 async function profile(host){
  const {profile}=await chrome.storage.local.get('profile');savedProfile=profile||{};entries=profileEntries(savedProfile);profileSnapshot=JSON.stringify(savedProfile);materials=await listMaterials();materialSnapshot=materialsSnapshot(materials);learnedFacts=await getLearnedFacts();learnedSnapshot=JSON.stringify(learnedFacts);rejectedAnswers=await getRejectedAnswers();rejectedSnapshot=JSON.stringify(rejectedAnswers);entries.push(...learnedEntries(learnedFacts,host));
  $('profile-info').textContent=`已保存 ${entries.length} 项资料、${materials.length} 份素材、${learnedFacts.length} 项学习资料${savedProfile.notes?'，含补充备注':''} · PDF / TXT 在本机保留`;
@@ -35,12 +63,12 @@ function providerUI(){
 function setEntry(field,id,source='手动选择',checked=true){
  const e=entries.find(x=>x.id===id);const value=e?defaultFieldValue(field,e.value):null;
  plan.set(field.id,{entryId:id||'',value,source,checked:!!e&&value!==null&&field.supported&&(!field.hasValue||$('overwrite').checked)&&checked});
- if(field.hasValue&&field.reviewValue!==undefined){const rejected=field.reviewMark==='rejected';plan.set(field.id,{entryId:'',value:field.reviewValue,filledValue:field.reviewValue,ai:true,checked:false,pendingConfirmation:!rejected,source:rejected?'用户已拒绝':'已填入 · 待确认',result:rejected?'请修改或清除网页值，也可采用网页修改并记住。':'上次已填入，尚未确认。'});}
+ if((field.hasValue||field.reviewMark==='changed')&&field.reviewValue!==undefined){const rejected=field.reviewMark==='rejected';plan.set(field.id,{entryId:'',value:field.reviewValue,filledValue:field.reviewMark==='changed'?null:field.reviewValue,failedReview:field.reviewMark==='changed',ai:true,checked:false,pendingConfirmation:!rejected,source:rejected?'用户已拒绝':'已填入 · 待确认',result:rejected?'请修改或清除网页值，也可采用网页修改并记住。':field.reviewMark==='changed'?'[VALUE_CHANGED] 上次写入的值已变化，请核对网页；未自动重填。':'上次已填入，尚未确认。'});}
 }
 function render(){
  $('preview').hidden=!fields.length;$('fields').replaceChildren();
  $('result-title').textContent=reviewOnly?'3 · 橙色待确认项':'3 · 填写预览';
- $('result-help').textContent=reviewOnly?'这里只显示橙色预警。接受、修改后确认或拒绝后，该项会从列表移除。未填和失败项请在网页处理。':'核对资料映射与待填值，可编辑后勾选填入。';
+ $('result-help').textContent=reviewOnly?'这里只显示橙色预警。接受、修改后确认或拒绝后，该项会从列表移除。填写失败和关联冲突也会标橙；缺少素材的项目请在网页补充。':'核对资料映射与待填值，可编辑后勾选填入。';
  $('fill').hidden=reviewOnly;
  const visibleFields=fields.filter(f=>!reviewOnly||plan.get(f.id)?.pendingConfirmation);
  if(reviewOnly&&!visibleFields.length){const empty=document.createElement('p');empty.className='muted';empty.id='review-empty';empty.textContent=busy?'正在处理，橙色预警项会显示在这里。':'没有橙色待确认项。';$('fields').append(empty);} 
@@ -60,7 +88,7 @@ function render(){
   if(f.supported&&p.value!==null&&p.value!==undefined){
     const confirm=document.createElement('button');confirm.className='small';confirm.textContent=p.filledValue?'接受此项并记住':'确认此项并填入、记住';confirm.disabled=busy;
     confirm.setAttribute('aria-label',`${f.label} 确认并记住`);confirm.onclick=()=>fillSelected({remember:true,ids:[f.id]});card.append(confirm);
-    if(p.filledValue){const current=document.createElement('button');current.className='small';current.textContent='采用网页修改并记住';current.setAttribute('aria-label',`${f.label} 采用网页修改`);current.disabled=busy;current.onclick=()=>acceptPageEdit(f);card.append(current);}
+    if(p.filledValue||p.failedReview){const current=document.createElement('button');current.className='small';current.textContent='采用网页修改并记住';current.setAttribute('aria-label',`${f.label} 采用网页修改`);current.disabled=busy;current.onclick=()=>acceptPageEdit(f);card.append(current);}
     if(p.ai){const reject=document.createElement('button');reject.className='small danger';reject.textContent='拒绝此答案';reject.disabled=busy;reject.setAttribute('aria-label',`${f.label} 拒绝此答案`);reject.onclick=()=>rejectAnswer(f);card.append(reject);}
   }
   if(f.supported&&!reviewOnly){
@@ -71,7 +99,7 @@ function render(){
     button.onclick=()=>{const raw=input.value.trim(),value=defaultFieldValue(f,raw);if(!raw||value===null){status('该值不符合日期格式或未对应唯一选项，请核对后重试。',true);return;}for(const item of plan.values())item.checked=false;plan.set(f.id,{entryId:'',value,source:'手动指定',checked:true});updateCount();$('fill').click();};manual.append(button);card.append(manual);
   }
   if(p.evidence?.length){const evidence=document.createElement('p');evidence.className='muted';evidence.textContent=(p.edited?'原模型依据（编辑后请重新核对）：':'资料出处：')+p.evidence.map(e=>`${e.label}「${e.quote}」`).join('；');card.append(evidence);}
-  if(p.reason){const reason=document.createElement('p');reason.className='muted';reason.textContent=p.reason;card.append(reason);}
+  if(p.reason&&p.reason!==p.result){const reason=document.createElement('p');reason.className='muted';reason.textContent=p.reason;card.append(reason);}
   if(p.auditDescription){const audit=document.createElement('p');audit.className='muted';audit.textContent=p.auditDescription;card.append(audit);}
   if(p.result){const r=document.createElement('p');r.className='muted';r.textContent=p.result;card.append(r);}
   $('fields').append(card);
@@ -96,7 +124,7 @@ function renderLearning(){
   $('learning-fields').append(card);
  }
 }
-$('capture-page').onclick=async()=>{lock(true);try{
+$('capture-page').onclick=async()=>{stopWatch();lock(true);try{
  const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!tab?.id||!/^https?:/.test(tab.url||''))throw Error('请先打开填好的网申页面。');
  await profile(new URL(tab.url).hostname);const result=await message({action:'capture',tabId:tab.id});
  fields=[];plan.clear();render();learningDraft=captureDraft(result.fields,result.host);renderLearning();status(`已读取 ${learningDraft.length} 项，请核对后勾选保存。${result.atLimit?'本页达到 300 项读取上限。':''}${result.limited?'部分框架无法访问。':''}网页未被修改，资料尚未保存。`);
@@ -110,7 +138,7 @@ $('provider').onchange=async()=>{provider=$('provider').value;await setProvider(
 $('save-key').onclick=async()=>{lock(true);try{const key=$('api-key').value.trim();if(!key||/\s/.test(key)||(provider==='jev'&&!key.startsWith('apikey_'))||(provider==='deepseek'&&!key.startsWith('sk-')))throw Error(`请输入完整的 ${provider==='deepseek'?'DeepSeek（sk- 开头）':'Jev'} 官方 API key。`);const result=await setApiKey(key,provider);$('api-key').value='';const current=await keyStatus();status(current.pc?'当前服务的密钥已保存到 PC 文件和浏览器本机副本，卸载插件不会删除 PC 文件。':'密钥已保存到本机浏览器，但尚未写入 PC 文件。'+(result.reason||'请检查 PC 文件连接状态。'),!current.pc);}catch(e){status(e.message,true);}finally{lock(false);updateCount();}};
 $('clear-key').onclick=async()=>{lock(true);try{await clearApiKey(provider);$('api-key').value='';await keyStatus();status('已清除当前服务的密钥，另一服务的密钥保持不变。');}catch(e){await keyStatus();status('清除未完成：'+e.message,true);}finally{lock(false);updateCount();}};
 $('connect-pc-keys').onclick=async()=>{lock(true);try{await connectPcKeys();await keyStatus();status('PC 密钥文件已连接。已迁移浏览器中尚未备份的密钥，或恢复 PC 中已有的密钥。');}catch(e){await keyStatus();status(e.message,true);}finally{lock(false);updateCount();}};
-async function scanCurrent(resetOverwrite=true){
+async function scanCurrent(resetOverwrite=true){stopWatch();
  reviewOnly=!resetOverwrite;
  const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!tab?.id||!/^https?:/.test(tab.url||''))throw Error('请打开普通 http/https 网申页面并点击扩展图标；浏览器设置页、PDF 预览和扩展页无法扫描。');
  await profile(new URL(tab.url).hostname);
@@ -172,9 +200,9 @@ async function fillSelected({remember=false,ids=null}={}){lock(true);try{
   r.results.push(result||{id:item.id,ok:false,reason:'网页未返回填写结果'});
  }
  const written=items.filter(item=>r.results.some(x=>x.id===item.id&&x.ok));
- if(written.length){await new Promise(resolve=>setTimeout(resolve,250));const check=await message({action:'verify',tabId,token,items:written});for(const result of r.results)if(result.ok){const verified=check.results?.find(x=>x.id===result.id);result.ok=verified?.ok===true;result.reason=verified?.reason||'无法核验网页值，请手动检查';}}
+ if(written.length){await new Promise(resolve=>setTimeout(resolve,1200));const check=await message({action:'verify',tabId,token,items:written});for(const result of r.results)if(result.ok){const verified=check.results?.find(x=>x.id===result.id);result.ok=verified?.ok===true;result.reason=verified?.reason||'无法核验网页值，请手动检查';}}
  for(const x of r.results){const p=plan.get(x.id);if(p){p.result=x.reason;p.checked=false;if(x.ok)p.filledValue=items.find(i=>i.id===x.id).value;}if(x.ok){const f=fields.find(f=>f.id===x.id);if(f)f.hasValue=true;}}
- let remembered=0;if(remember){const successful=items.filter(item=>r.results.some(x=>x.id===item.id&&x.ok));if(successful.length){try{const result=await message({action:'save-learning',facts:confirmationFacts(successful,new URL(tab.url).hostname)});remembered=result.count;for(const item of successful){const p=plan.get(item.id);p.pendingConfirmation=false;p.source='用户已接受并记住';p.auditDescription='用户确认 · 下次同网站、同类目、同经历优先使用';}await message({action:'mark-review',tabId,token,items:successful.map(f=>({...f,mark:''}))});await profile(new URL(tab.url).hostname);}catch(e){throw Error('网页已填入，但本地记忆保存失败：'+e.message+'；请重新扫描或读取已填页面后保存。');}}}
+ let remembered=0;if(remember){const successful=items.filter(item=>r.results.some(x=>x.id===item.id&&x.ok));if(successful.length){try{const result=await message({action:'save-learning',facts:confirmationFacts(successful,new URL(tab.url).hostname)});remembered=result.count;for(const item of successful){const p=plan.get(item.id);feedbackResolved(item.id,item.value);p.failedReview=false;p.pendingConfirmation=false;p.source='用户已接受并记住';p.auditDescription='用户确认 · 下次同网站、同类目、同经历优先使用';}await message({action:'mark-review',tabId,token,items:successful.map(f=>({...f,mark:''}))});await profile(new URL(tab.url).hostname);}catch(e){throw Error('网页已填入，但本地记忆保存失败：'+e.message+'；请重新扫描或读取已填页面后保存。');}}}
  status(`已填入 ${r.results.filter(x=>x.ok).length} 项，跳过或失败 ${r.results.filter(x=>!x.ok).length} 项。${remember?`已记住 ${remembered} 项，仅用于当前网站的同类目、同经历字段；可在资料页编辑、停用或删除。`:''}请检查网页上的内容及校验提示，再自行继续网申。`);
  }catch(e){status(e.message,true);}finally{lock(false);render();}}
 $('fill').onclick=()=>fillSelected();
@@ -192,15 +220,15 @@ async function rejectAnswer(field){lock(true);try{
  const [fact]=confirmationFacts([{...field,value}],new URL(tab.url).hostname);
  await message({action:'reject-answer',fact});await profile(new URL(tab.url).hostname);
  p.checked=false;p.pendingConfirmation=false;p.result='已记住拒绝：下次不会自动填这个答案。'+(p.filledValue?'网页仍保留原值，请手动修改或清除；也可在侧栏修改后接受。':'');
- p.source='用户已拒绝';
+ feedbackResolved(field.id);p.source='用户已拒绝';
  if(p.filledValue)await message({action:'mark-review',tabId,token,items:[{...field,value,mark:'rejected'}]});
  status(p.result+' 可在资料页撤销拒绝。');
  }catch(e){status(e.message,true);}finally{lock(false);render();}}
 function showCollaboration(progress){
  for(const record of progress.records){
-  if(!record.proposal){const current=plan.get(record.fieldId);if(current){current.checked=false;current.result=record.status==='needs_review'?record.reason:undefined;}continue;}
+  if(!record.proposal){const current=plan.get(record.fieldId);if(current){current.checked=false;current.result=record.status==='needs_review'?record.reason:undefined;current.pendingConfirmation=current.pendingConfirmation||!!record.warning;}continue;}
   const labels={checking:'等待核验',approved:'核验通过',needs_review:'需人工核对',filled:'协作已填入',filled_review:'已填入 · 待确认',failed:'网页核验未通过'};
-  const p={entryId:'',value:record.proposal.value,source:labels[record.status]||'协作草案',ai:true,evidence:record.proposal.evidence,reason:record.proposal.reason,checked:false,result:record.reason,pendingConfirmation:record.status==='filled_review',filledValue:['filled','filled_review'].includes(record.status)?record.proposal.value:null};
+  const p={entryId:'',value:record.proposal.value,source:labels[record.status]||'协作草案',ai:true,evidence:record.proposal.evidence,reason:record.proposal.reason,checked:false,result:record.reason,pendingConfirmation:record.status==='filled_review'||!!record.warning,failedReview:record.status==='failed',filledValue:(['filled','filled_review'].includes(record.status)||record.warning&&fields.find(f=>f.id===record.fieldId)?.hasValue&&fields.find(f=>f.id===record.fieldId)?.currentValue===record.proposal.value)?record.proposal.value:null};
   if(p.filledValue){const field=fields.find(f=>f.id===record.fieldId);if(field)field.hasValue=true;}
   if(record.review){const r=record.review;p.auditDescription=r.method==='confirmed'?'本地确定性核验：字段与经历身份一致，值来自已确认资料，原文与格式有效':r.method==='cache'?'复用上次执行成功的方案：素材与字段未变，已重新核验原文和格式；仍需你确认':r.method==='local'?'快速填写：Jev 定位素材，DeepSeek 提取原文，本地核验经历与格式；未做独立模型复核，请确认':`${r.policy==='passage'?'原文段落':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核栏目对应、原文完整性和素材冲突':'Jev 校核存在疑问'}${record.route?' · Jev 定位：'+record.route.label+(record.route.uncertain?'（范围置信度 '+record.route.confidence.toFixed(2)+'，待确认）':'')+(record.route.record?' 第 '+record.route.record+' 条':''):''}${record.history.at(-1)?.round>1?' · 已修正复核':''}`;}
   plan.set(record.fieldId,p);
@@ -222,14 +250,19 @@ $('collaborate').onclick=async()=>{
   });
   const [cacheTab]=await chrome.tabs.query({active:true,currentWindow:true});await assertFresh();
   let cacheEpoch=0;
-  const planCache=$('fill-uncertain').checked?await createPlanCache({fields,sources,pageUrl:cacheTab.url,pageContext,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),load:async()=>{const saved=await chrome.storage.local.get([PLAN_CACHE_KEY,'planCacheEpoch']);cacheEpoch=saved.planCacheEpoch||0;return saved[PLAN_CACHE_KEY]||[];},save:rows=>message({action:'cache-plans',rows,epoch:cacheEpoch})}):null;
+  const planCache=$('fill-uncertain').checked?await createPlanCache({fields,sources,pageUrl:cacheTab.url,pageContext,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),load:async()=>{const saved=await chrome.storage.local.get([PLAN_CACHE_KEY,'planCacheEpoch']);cacheEpoch=saved.planCacheEpoch||0;return saved[PLAN_CACHE_KEY]||[];},save:rows=>message({action:'cache-plans',rows,epoch:cacheEpoch}),remove:keys=>message({action:'invalidate-cache',keys})}):null;
   const result=await runCollaboration({fields,sources,entries,pageContext,overwrite,planCache,fillUncertain:$('fill-uncertain').checked,fastMode:$('fill-uncertain').checked,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),signal:controller.signal,assertFresh,onProgress:showCollaboration,
     draft:async(batch,workflow)=>{const r=await message({action:'deepseek-fill',fields:batch,sources,workflow});usage.deepseekInput+=r.usage?.prompt_tokens||0;usage.deepseekOutput+=r.usage?.completion_tokens||0;return r;},
     judge:async payload=>{const r=await message({action:'evaluate',payload});usage.jev+=r.usage?.input_tokens||0;return r;},
+    verifyWritten:async items=>{await new Promise(r=>setTimeout(r,1200));await assertFresh();return (await message({action:'verify',tabId,token,items})).results||[];},
     apply:async(f,value,{uncertain})=>{const items=[{...f,value}];const written=await message({action:'fill',tabId,token,overwrite,items});const first=written.results?.find(x=>x.id===f.id);if(!first?.ok)return {ok:false,reason:first?.reason||'网页未返回填写结果'};await new Promise(resolve=>setTimeout(resolve,250));const verified=await message({action:'verify',tabId,token,items});const result=verified.results?.find(x=>x.id===f.id)||{ok:false,reason:'无法核验网页值，请手动检查'};if(result.ok&&uncertain)await message({action:'mark-review',tabId,token,items:[{...f,value,mark:'uncertain'}]});return result;}
   });
+  const marked=result.filter(r=>r.warning&&r.proposal);if(marked.length)await message({action:'mark-review',tabId,token,items:marked.map(r=>({...fields.find(f=>f.id===r.fieldId),value:r.proposal.value,mark:r.status==='failed'?'changed':'uncertain'}))});
   const warnings=result.filter(x=>x.auditBlocked).map(x=>x.reason);
-  const count=state=>result.filter(x=>x.status===state).length;status(`协作完成：已填入并核验 ${count('filled')+count('filled_review')} 项${count('filled_review')?`（其中 ${count('filled_review')} 项已标橙待确认）`:''}，待人工核对 ${count('needs_review')} 项，填写失败 ${count('failed')} 项，跳过 ${count('skipped')} 项。${prepared.added?`已自动新增 ${prepared.added} 组经历。`:""}${result.some(x=>x.cacheHit&&x.status==='filled_review')?`复用上次方案 ${result.filter(x=>x.cacheHit&&x.status==='filled_review').length} 项。`:''}${result.some(x=>x.cacheWriteFailed)?'本次加速记录未保存，下次仍可正常分析填写。':''}本次用时 ${Math.round((performance.now()-startedAt)/1000)} 秒。已保留出处与核验结果，请检查后自行提交。${warnings.length?' '+warnings.slice(0,3).join(' '):''}`);
+  const elapsedSeconds=Math.round((performance.now()-startedAt)/1000);
+  const completion=()=>{const count=state=>result.filter(x=>x.status===state).length;return `协作完成：已填入并核验 ${count('filled')+count('filled_review')} 项${count('filled_review')?`（其中 ${count('filled_review')} 项已标橙待确认）`:''}，待人工核对 ${count('needs_review')} 项，填写失败 ${count('failed')} 项，跳过 ${count('skipped')} 项。${prepared.added?`已自动新增 ${prepared.added} 组经历。`:""}${result.some(x=>x.cacheHit&&x.status==='filled_review')?`复用上次方案 ${result.filter(x=>x.cacheHit&&x.status==='filled_review').length} 项。`:''}${result.some(x=>x.cacheWriteFailed)?'本次加速记录未保存，下次仍可正常分析填写。':''}本次用时 ${elapsedSeconds} 秒。已保留出处与核验结果，请检查后自行提交。${warnings.length?' '+warnings.slice(0,3).join(' '):''}侧栏打开且停留在该网页时，会继续核验本轮已填项目。`;};
+  status(completion());startWatch(result,planCache,completion);
+
  }catch(e){status(e.message+(e.name==='AbortError'?'':' 尚未执行的字段不会自动填入。'),e.name!=='AbortError');}
  finally{collaborationController=null;lock(false);for(const p of plan.values())p.checked=false;render();showUsage();await keyStatus();}
 };

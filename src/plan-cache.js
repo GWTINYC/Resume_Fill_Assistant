@@ -5,7 +5,7 @@ import {validateDeepseekFills} from './deepseek.js';
 import {wasRejected} from './learned.js';
 
 export const PLAN_CACHE_KEY='executedPlanCache';
-export const PLAN_CACHE_VERSION=1;
+export const PLAN_CACHE_VERSION=2;
 export const PLAN_CACHE_TTL=7*24*60*60*1000;
 const bytes=x=>new TextEncoder().encode(JSON.stringify(x)).length;
 const digest=async x=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(x))))].map(n=>n.toString(16).padStart(2,'0')).join('');
@@ -27,7 +27,7 @@ export function mergePlanCache(existing,incoming,now=Date.now()){
  for(const row of [...rows.values()].sort((a,b)=>b.savedAt-a.savedAt)){const n=bytes(row);if(kept.length>=96||total+n>2000000)break;kept.push(row);total+=n;}
  return kept;
 }
-export async function createPlanCache({fields,sources,pageUrl,pageContext={},rejectedAnswers=[],load,save,now=Date.now}){
+export async function createPlanCache({fields,sources,pageUrl,pageContext={},rejectedAnswers=[],load,save,remove=async()=>{},now=Date.now}){
  const url=new URL(pageUrl);
  if(!['https:','http:'].includes(url.protocol))return null;
  // Hash all active source contents and feedback. Even an unrelated source change
@@ -45,6 +45,7 @@ export async function createPlanCache({fields,sources,pageUrl,pageContext={},rej
    if(wasRejected(field,proposal.value,rejectedAnswers)||!allowedRanges(field,ranges,sources).some(range=>evidenceInRange(proposal,range)))return null;
    return validateDeepseekFills({fills:[proposal]},[field],sources).fills[0]||null;
   },
+  async remove(field){const key=keys.get(field.id);if(key){rows.delete(key);await remove([key]);}},
   async put(field,proposal){
    const key=keys.get(field.id);if(!key)return;
    const row=cleanRow({version:PLAN_CACHE_VERSION,key,savedAt:now(),proposal},now());

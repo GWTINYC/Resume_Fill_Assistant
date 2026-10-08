@@ -1,11 +1,11 @@
 {
   "name": "jev-apply",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test tests/core.test.mjs tests/plan-cache.test.mjs",
+    "test": "node --test tests/core.test.mjs tests/plan-cache.test.mjs tests/field-review.test.mjs",
     "test:browser": "node tests/browser.mjs",
     "test:deepseek": "node tests/deepseek.browser.mjs",
     "test:collaboration": "node tests/collaboration.browser.mjs",
@@ -21,7 +21,8 @@
     "test:beisen-controls": "node tests/beisen-controls.browser.mjs",
     "test:manual": "node tests/manual.browser.mjs",
     "test:feedback": "node tests/feedback.browser.mjs",
-    "test:cache": "node tests/cache.browser.mjs"
+    "test:cache": "node tests/cache.browser.mjs",
+    "test:late-change": "node tests/late-change.browser.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "^6.3.289"

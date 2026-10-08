@@ -1,3 +1,4 @@
+import {relatedFieldWarnings,reconcileWritten} from './field-review.js';
 import {routingPackets,readRouteDecisions,evidenceInRange,confirmedRange} from './source-routing.js';
 import {rejectedForField,wasRejected} from './learned.js';
 import {acceptedChoice,defaultFieldValue,localMapping,normalize} from './core.js';
@@ -80,10 +81,9 @@ export function combineAudit(field,proposal,entries,checks){
 }
 function checkSignal(signal){if(signal?.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');}
 // Dependencies are injectable so the full workflow can be tested without live keys.
-export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,fillUncertain=false,fastMode=false,rejectedAnswers=[],planCache=null}){
+export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,fillUncertain=false,fastMode=false,rejectedAnswers=[],planCache=null,verifyWritten=null}){
  const target=fields.filter(f=>f.supported&&(!f.hasValue||overwrite));
  const records=new Map(fields.map(f=>[f.id,{fieldId:f.id,status:f.supported?(f.hasValue&&!overwrite?'skipped':'pending'):'skipped',reason:f.supported?'已有内容，已跳过':f.reason||'不支持的控件',history:[]}]))
- if(!target.length)return [...records.values()];
  const seenFields=new Map(fields.map(f=>[f.id,f]));let auditCalls=0;
  const emit=(stage,message)=>onProgress({stage,message,records:[...records.values()]});
  // Known property + confirmed source + exact representation is stronger evidence than model confidence.
@@ -171,11 +171,28 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
   }
   if(fillUncertain&&record.route?.uncertain&&record.status==='approved')record.uncertain=true;
  }
- for(const record of records.values()){
-  if(record.status!=='approved')continue;checkSignal(signal);await assertFresh();emit('fill',`正在填入并核验：${seenFields.get(record.fieldId).label}`);
+ for(const [id,issue] of relatedFieldWarnings(fields,records)){
+  const record=records.get(id),field=seenFields.get(id);record.warning=true;record.ruleWarning=issue.reason;
+  if(issue.block||!fastMode){record.status='needs_review';record.reason=issue.reason;}
+  else if(record.status==='approved'){record.uncertain=true;record.reason=issue.reason;}
+  if(field.hasValue&&record.status==='skipped'){record.status='needs_review';record.reason=issue.reason;}
+  if(!record.proposal&&field.hasValue)record.proposal={fieldId:id,value:field.currentValue,evidence:[],reason:issue.reason};
+ }
+ // Write skill names before proficiency even when the page lists the controls in reverse order.
+ for(const record of [...records.values()].sort((a,b)=>Number(/掌握程度|熟练程度/.test(seenFields.get(a.fieldId).label))-Number(/掌握程度|熟练程度/.test(seenFields.get(b.fieldId).label)))){
+  if(record.status!=='approved')continue;const dependency=relatedFieldWarnings(fields,records).get(record.fieldId);if(dependency?.block){record.status='needs_review';record.warning=true;record.reason=dependency.reason;continue;}checkSignal(signal);await assertFresh();emit('fill',`正在填入并核验：${seenFields.get(record.fieldId).label}`);
   const result=await apply(seenFields.get(record.fieldId),record.proposal.value,{uncertain:!!record.uncertain});
-  record.status=result.ok?(record.uncertain?'filled_review':'filled'):'failed';record.reason=(result.ok&&record.uncertain?'已填入 · 待你确认。':'')+result.reason;
-  if(result.ok&&fastMode&&planCache&&record.review?.method!=='confirmed'){try{await planCache.put(seenFields.get(record.fieldId),record.proposal);}catch{record.cacheWriteFailed=true;record.reason+=' 本次已填入，但加速记录未保存。';}}
+  record.status=result.ok?(record.uncertain?'filled_review':'filled'):'failed';record.warning=record.warning||!result.ok;record.reason=(result.ok&&record.uncertain?'已填入 · 待你确认。':'')+result.reason+(record.ruleWarning?' '+record.ruleWarning:'');
+
+ }
+ for(const record of records.values())if(record.status==='failed')try{await planCache?.remove?.(seenFields.get(record.fieldId));}catch{}
+ if(verifyWritten){
+  checkSignal(signal);await assertFresh();emit('settling','正在整轮复核，检查网页是否保留填写结果…');
+  const written=[...records.values()].filter(r=>['filled','filled_review'].includes(r.status));
+  if(written.length)await reconcileWritten([...records.values()],await verifyWritten(written.map(r=>({...seenFields.get(r.fieldId),value:r.proposal.value}))),fields,planCache);
+ }
+ for(const record of records.values())if(['filled','filled_review'].includes(record.status)&&fastMode&&planCache&&!record.ruleWarning&&record.review?.method!=='confirmed'){
+  try{await planCache.put(seenFields.get(record.fieldId),record.proposal);}catch{record.cacheWriteFailed=true;record.reason+=' 本次已填入，但加速记录未保存。';}
  }
  emit('complete','协作完成');return [...records.values()];
 }

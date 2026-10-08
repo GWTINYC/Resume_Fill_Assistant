@@ -369,7 +369,7 @@ export async function pageBridge(args) {
         if(!capturedValue.trim()||/^(请选择|please select|select|choose)(?:\s|$)/i.test(capturedValue)||capturedValue.length>10000)continue;
         if(label==='未命名字段')captureWarning='未识别到字段标题，请先补全名称。';
       }
-      fields.push({id,label,datePart,...(globalThis.__jevReviewValues?.get(el)||{}),...(capturing?{capturedValue,captureWarning}:{}),name:clean(el.name),type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required||el.getAttribute('aria-required')==='true'||!!item?.querySelector('.form-item__required'),maxLength,hasValue,options,selectionMode,supported,reason:supported?'':type==='file'?'附件需要手动上传':reason});state.entries.set(id,entry);
+      fields.push({id,label,datePart,currentValue:hasValue?current:'',...(globalThis.__jevReviewValues?.get(el)||{}),...(capturing?{capturedValue,captureWarning}:{}),name:clean(el.name),type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required||el.getAttribute('aria-required')==='true'||!!item?.querySelector('.form-item__required'),maxLength,hasValue,options,selectionMode,supported,reason:supported?'':type==='file'?'附件需要手动上传':reason});state.entries.set(id,entry);
       if(fields.length>=(capturing?300:100))break;
     }
     const sections=discoverSections();state.sections=new Map(sections.map(s=>[s.id,s]));
@@ -440,9 +440,22 @@ export async function pageBridge(args) {
         else{
           if(el.tagName==='SELECT'&&![...el.options].some(o=>o.value===value&&!o.disabled&&!o.parentElement?.disabled))throw Error('选项已变化');
           if(el.maxLength>0&&value.length>el.maxLength)throw Error('超过字段长度上限');const proto=el.tagName==='SELECT'?HTMLSelectElement.prototype:el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+          // Phoenix composite inputs activate their editable state on click, not focus alone.
+          const activate=['INPUT','TEXTAREA'].includes(el.tagName)&&!['date','month','number'].includes(el.type);
+          if(activate)press(el);el.focus();if(activate)await pause(120);
+          if(!visible(el)||el.readOnly||signature(el,false)!==entry.signature)throw Error('激活后字段已变化，请重新扫描');
+          if(String(el.value||'')!==String(current||''))throw Error('激活期间网页值已变化，未覆盖，请重新扫描');
           Object.getOwnPropertyDescriptor(proto,'value').set.call(el,value);if(el.value!==value){Object.getOwnPropertyDescriptor(proto,'value').set.call(el,current||'');throw Error('该控件不接受此格式');}
         }
-        if(!kind){target.dispatchEvent(new Event('input',{bubbles:true,composed:true}));target.dispatchEvent(new Event('change',{bubbles:true,composed:true}));}
+        if(!kind){
+          const textInput=!radios&&['INPUT','TEXTAREA'].includes(target.tagName)&&!['date','month','number'].includes(target.type);
+          target.dispatchEvent(textInput?new InputEvent('input',{bubbles:true,composed:true,inputType:'insertReplacementText',data:value}):new Event('input',{bubbles:true,composed:true}));
+          // Let controlled inputs commit their pending state before change/blur can render it again.
+          await pause(80);target.dispatchEvent(new Event('change',{bubbles:true,composed:true}));
+          // A side panel can hold browser focus: blur() then changes activeElement without emitting blur.
+          let blurred=false;const sawBlur=()=>{blurred=true;};target.addEventListener('blur',sawBlur);target.blur();target.removeEventListener('blur',sawBlur);
+          if(!blurred&&!radios){target.dispatchEvent(new FocusEvent('blur',{composed:true}));target.dispatchEvent(new FocusEvent('focusout',{bubbles:true,composed:true}));}
+        }
         results.push({id:item.id,ok:true,reason:target.validity&&!target.validity.valid?'已填入，但网页格式校验未通过，请检查':'已填入'});
       }catch(e){results.push({id:item.id,ok:false,reason:e.message||'填写失败'});}
     }
