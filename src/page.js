@@ -139,14 +139,26 @@ export async function pageBridge(args) {
     return null;
   };
   const chooseCascade=async(el,popup,value)=>{
-    const expected=normalizedPath(value);let consumed='';
+    const expected=normalizedPath(value);let consumed='',previousChildren=null;
+    const columns=()=>[...popup.querySelectorAll('.ant-cascader-menu,.el-cascader-menu,[role=menu]')].filter(visible);
+    const snapshot=column=>column?[...column.querySelectorAll(choiceSelector)]:[];
     for(let depth=0;depth<5;depth++){
-      await stableOptions(popup);
-      const columns=[...popup.querySelectorAll('.ant-cascader-menu,.el-cascader-menu,[role=menu]')].filter(visible);
-      const column=columns[depth];if(!column)throw Error('[CASCADE_LEVEL] 未读取到下一层级，请核对省市区是否齐全');
+      // Await this specific level, not stability of already-rendered parent options.
+      const column=await waitUntil(()=>{
+        if(!visible(el)||!visible(popup))throw Error('[CASCADE_CHANGED] 级联控件已关闭或变化，请重新填写');
+        const next=columns()[depth];if(!next||!readOptions(next).length)return null;
+        const nodes=snapshot(next);
+        if(previousChildren&&next===previousChildren.column&&nodes.length===previousChildren.nodes.length&&nodes.every((n,i)=>n===previousChildren.nodes[i])&&next.textContent===previousChildren.text)return null;
+        return next;
+      },'CASCADE_LEVEL','下一层级选项未加载完成，请重试此字段或检查省市区是否齐全');
+      await stableOptions(column);
+      if(!visible(column)||columns()[depth]!==column)throw Error('[CASCADE_CHANGED] 级联选项已重新渲染，请重试此字段');
       const candidates=readOptions(column).filter(o=>!o.disabled&&expected.startsWith(consumed+normalizedPath(o.label)));
       if(candidates.length!==1)throw Error('[CASCADE_AMBIGUOUS] 素材无法唯一对应当前层级，请提供完整省市区路径');
-      const option=candidates[0];consumed+=normalizedPath(option.label);press(option.node);await pause(200);
+      const option=candidates[0],next=columns()[depth+1];
+      const alreadySelected=option.node.getAttribute('aria-selected')==='true'||option.node.matches('.ant-cascader-menu-item-active,.el-cascader-node.is-active');
+      previousChildren=next&&!alreadySelected?{column:next,nodes:snapshot(next),text:next.textContent}:null;
+      consumed+=normalizedPath(option.label);press(option.node);
       if(consumed===expected)return;
     }
     throw Error('[CASCADE_DEPTH] 级联层级超过支持范围，请手动选择');
@@ -375,7 +387,7 @@ export async function pageBridge(args) {
         const styles=globalThis.__jevReviewStyles||(globalThis.__jevReviewStyles=new WeakMap());
         if(!styles.has(node))styles.set(node,{outline:node.style.outline,offset:node.style.outlineOffset,title:node.getAttribute('title')});
         const original=styles.get(node);const reviews=globalThis.__jevReviewValues||(globalThis.__jevReviewValues=new WeakMap());if(item.mark)reviews.set(el,{reviewValue:item.value,reviewMark:item.mark});else reviews.delete(el);
-        if(item.mark){node.style.outline='2px solid '+(item.mark==='rejected'?'#c43b32':'#d58a00');node.style.outlineOffset='2px';if(node!==el)node.setAttribute('title',item.mark==='rejected'?'网申助手：已拒绝此答案，请修改或清除网页值':'网申助手：此项已填写但置信度不足，请在侧栏接受、修改或拒绝');}
+        if(item.mark){node.style.outline='2px solid '+(item.mark==='rejected'?'#c43b32':'#d58a00');node.style.outlineOffset='2px';if(node!==el)node.setAttribute('title',item.mark==='rejected'?'网申助手：已拒绝此答案，请修改或清除网页值':'网申助手：此项已填写，尚待你确认，请在侧栏接受、修改或拒绝');}
         else{node.style.outline=original.outline;node.style.outlineOffset=original.offset;if(node!==el){if(original.title===null)node.removeAttribute('title');else node.setAttribute('title',original.title);}styles.delete(node);}
         results.push({id:item.id,ok:true});continue;
       }

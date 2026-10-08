@@ -1,6 +1,7 @@
+import {PLAN_CACHE_KEY,mergePlanCache} from './plan-cache.js';
 import {pageBridge} from './page.js';
 import {mergeLearnedFacts,validateLearnedFacts,factKey} from './learned.js';
-import {getRejectedAnswers,getLearnedFacts,setLearnedFacts,getApiKey} from './storage.js';
+import {getRejectedAnswers,getLearnedFacts,setLearnedFacts,getApiKey,clearMaterials} from './storage.js';
 import {deepseekPayload,validateDeepseekFills} from './deepseek.js';
 chrome.action.onClicked.addListener(tab=>{if(tab.windowId!==undefined)chrome.sidePanel.open({windowId:tab.windowId}).catch(()=>{});});
 async function inject(tabId,args,frameIds){
@@ -8,6 +9,10 @@ async function inject(tabId,args,frameIds){
   return chrome.scripting.executeScript({target:frameIds?{tabId,frameIds}:{tabId,allFrames:true},func:pageBridge,args:[args]});
 }
 async function handle(message){
+  if(message.action==='clear-personal-data'){const saved=await chrome.storage.local.get('planCacheEpoch');await chrome.storage.local.set({planCacheEpoch:(saved.planCacheEpoch||0)+1});await clearMaterials();await chrome.storage.local.remove(['profile','learnedFacts','rejectedAnswers',PLAN_CACHE_KEY]);return {};}
+
+  if(message.action==='cache-plans'){const saved=await chrome.storage.local.get([PLAN_CACHE_KEY,'planCacheEpoch']);if(message.epoch!==(saved.planCacheEpoch||0))throw Error('个人资料已清除，未保存旧的加速记录。');await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.storage.local.set({[PLAN_CACHE_KEY]:mergePlanCache(saved[PLAN_CACHE_KEY],message.rows)});return {};}
+
   if(message.action==='scan'||message.action==='capture'){
     const action=message.action;
     const token=crypto.randomUUID();let results,limited=false;
@@ -79,6 +84,6 @@ async function handle(message){
 let learningWrites=Promise.resolve();
 chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   if(sender.id!==chrome.runtime.id||!sender.url?.startsWith(chrome.runtime.getURL('')))return false;
-  const task=['save-learning','edit-learning','reject-answer','remove-rejection'].includes(message.action)?(learningWrites=learningWrites.catch(()=>{}).then(()=>handle(message))):handle(message);
+  const task=['save-learning','edit-learning','reject-answer','remove-rejection','cache-plans','clear-personal-data'].includes(message.action)?(learningWrites=learningWrites.catch(()=>{}).then(()=>handle(message))):handle(message);
   task.then(result=>reply({ok:true,...result})).catch(error=>reply({ok:false,error:error.name==='TimeoutError'?'服务响应超时，请稍后重试':error.message||'操作失败'}));return true;
 });

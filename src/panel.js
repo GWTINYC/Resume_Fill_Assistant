@@ -1,3 +1,4 @@
+import {createPlanCache,PLAN_CACHE_KEY} from './plan-cache.js';
 import {pcKeyHint} from './native-keys.js';
 import {mergeLearnedFacts,confirmationFacts,captureDraft,LEARN_CATEGORIES,learningProperty,factKey,learnedEntries,preferredLearned,learnedSourceAllowed} from './learned.js';
 import {routeExperienceFields} from './experience-routing.js';
@@ -201,7 +202,7 @@ function showCollaboration(progress){
   const labels={checking:'等待核验',approved:'核验通过',needs_review:'需人工核对',filled:'协作已填入',filled_review:'已填入 · 待确认',failed:'网页核验未通过'};
   const p={entryId:'',value:record.proposal.value,source:labels[record.status]||'协作草案',ai:true,evidence:record.proposal.evidence,reason:record.proposal.reason,checked:false,result:record.reason,pendingConfirmation:record.status==='filled_review',filledValue:['filled','filled_review'].includes(record.status)?record.proposal.value:null};
   if(p.filledValue){const field=fields.find(f=>f.id===record.fieldId);if(field)field.hasValue=true;}
-  if(record.review){const r=record.review;p.auditDescription=r.method==='confirmed'?'本地确定性核验：字段与经历身份一致，值来自已确认资料，原文与格式有效':r.method==='local'?'快速填写：Jev 定位素材，DeepSeek 提取原文，本地核验经历与格式；未做独立模型复核，请确认':`${r.policy==='passage'?'原文段落':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核栏目对应、原文完整性和素材冲突':'Jev 校核存在疑问'}${record.route?' · Jev 定位：'+record.route.label+(record.route.uncertain?'（范围置信度 '+record.route.confidence.toFixed(2)+'，待确认）':'')+(record.route.record?' 第 '+record.route.record+' 条':''):''}${record.history.at(-1)?.round>1?' · 已修正复核':''}`;}
+  if(record.review){const r=record.review;p.auditDescription=r.method==='confirmed'?'本地确定性核验：字段与经历身份一致，值来自已确认资料，原文与格式有效':r.method==='cache'?'复用上次执行成功的方案：素材与字段未变，已重新核验原文和格式；仍需你确认':r.method==='local'?'快速填写：Jev 定位素材，DeepSeek 提取原文，本地核验经历与格式；未做独立模型复核，请确认':`${r.policy==='passage'?'原文段落':r.policy==='fact'?'事实字段':'类型不明确'} · ${r.approved?'Jev 已校核栏目对应、原文完整性和素材冲突':'Jev 校核存在疑问'}${record.route?' · Jev 定位：'+record.route.label+(record.route.uncertain?'（范围置信度 '+record.route.confidence.toFixed(2)+'，待确认）':'')+(record.route.record?' 第 '+record.route.record+' 条':''):''}${record.history.at(-1)?.round>1?' · 已修正复核':''}`;}
   plan.set(record.fieldId,p);
  }
  status(progress.message);render();showUsage();
@@ -219,13 +220,16 @@ $('collaborate').onclick=async()=>{
     add:(section,target)=>message({action:'add-record',tabId,token,frameId:section.frameId,sectionId:section.localId,target}),
     rescan:async()=>{const r=await message({action:'scan',tabId});token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();for(const f of fields)setEntry(f,preferredLearned(f,entries).at(0)||localMapping(f,entries.filter(e=>learnedSourceAllowed(f,e)))||'','新增后重新扫描');render();return recordSections;}
   });
-  const result=await runCollaboration({fields,sources,entries,pageContext,overwrite,fillUncertain:$('fill-uncertain').checked,fastMode:$('fill-uncertain').checked,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),signal:controller.signal,assertFresh,onProgress:showCollaboration,
+  const [cacheTab]=await chrome.tabs.query({active:true,currentWindow:true});await assertFresh();
+  let cacheEpoch=0;
+  const planCache=$('fill-uncertain').checked?await createPlanCache({fields,sources,pageUrl:cacheTab.url,pageContext,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),load:async()=>{const saved=await chrome.storage.local.get([PLAN_CACHE_KEY,'planCacheEpoch']);cacheEpoch=saved.planCacheEpoch||0;return saved[PLAN_CACHE_KEY]||[];},save:rows=>message({action:'cache-plans',rows,epoch:cacheEpoch})}):null;
+  const result=await runCollaboration({fields,sources,entries,pageContext,overwrite,planCache,fillUncertain:$('fill-uncertain').checked,fastMode:$('fill-uncertain').checked,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),signal:controller.signal,assertFresh,onProgress:showCollaboration,
     draft:async(batch,workflow)=>{const r=await message({action:'deepseek-fill',fields:batch,sources,workflow});usage.deepseekInput+=r.usage?.prompt_tokens||0;usage.deepseekOutput+=r.usage?.completion_tokens||0;return r;},
     judge:async payload=>{const r=await message({action:'evaluate',payload});usage.jev+=r.usage?.input_tokens||0;return r;},
     apply:async(f,value,{uncertain})=>{const items=[{...f,value}];const written=await message({action:'fill',tabId,token,overwrite,items});const first=written.results?.find(x=>x.id===f.id);if(!first?.ok)return {ok:false,reason:first?.reason||'网页未返回填写结果'};await new Promise(resolve=>setTimeout(resolve,250));const verified=await message({action:'verify',tabId,token,items});const result=verified.results?.find(x=>x.id===f.id)||{ok:false,reason:'无法核验网页值，请手动检查'};if(result.ok&&uncertain)await message({action:'mark-review',tabId,token,items:[{...f,value,mark:'uncertain'}]});return result;}
   });
   const warnings=result.filter(x=>x.auditBlocked).map(x=>x.reason);
-  const count=state=>result.filter(x=>x.status===state).length;status(`协作完成：已填入并核验 ${count('filled')+count('filled_review')} 项${count('filled_review')?`（其中 ${count('filled_review')} 项已标橙待确认）`:''}，待人工核对 ${count('needs_review')} 项，填写失败 ${count('failed')} 项，跳过 ${count('skipped')} 项。${prepared.added?`已自动新增 ${prepared.added} 组经历。`:""}本次用时 ${Math.round((performance.now()-startedAt)/1000)} 秒。已保留出处与核验结果，请检查后自行提交。${warnings.length?' '+warnings.slice(0,3).join(' '):''}`);
+  const count=state=>result.filter(x=>x.status===state).length;status(`协作完成：已填入并核验 ${count('filled')+count('filled_review')} 项${count('filled_review')?`（其中 ${count('filled_review')} 项已标橙待确认）`:''}，待人工核对 ${count('needs_review')} 项，填写失败 ${count('failed')} 项，跳过 ${count('skipped')} 项。${prepared.added?`已自动新增 ${prepared.added} 组经历。`:""}${result.some(x=>x.cacheHit&&x.status==='filled_review')?`复用上次方案 ${result.filter(x=>x.cacheHit&&x.status==='filled_review').length} 项。`:''}${result.some(x=>x.cacheWriteFailed)?'本次加速记录未保存，下次仍可正常分析填写。':''}本次用时 ${Math.round((performance.now()-startedAt)/1000)} 秒。已保留出处与核验结果，请检查后自行提交。${warnings.length?' '+warnings.slice(0,3).join(' '):''}`);
  }catch(e){status(e.message+(e.name==='AbortError'?'':' 尚未执行的字段不会自动填入。'),e.name!=='AbortError');}
  finally{collaborationController=null;lock(false);for(const p of plan.values())p.checked=false;render();showUsage();await keyStatus();}
 };

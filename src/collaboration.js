@@ -80,7 +80,7 @@ export function combineAudit(field,proposal,entries,checks){
 }
 function checkSignal(signal){if(signal?.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');}
 // Dependencies are injectable so the full workflow can be tested without live keys.
-export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,fillUncertain=false,fastMode=false,rejectedAnswers=[]}){
+export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,fillUncertain=false,fastMode=false,rejectedAnswers=[],planCache=null}){
  const target=fields.filter(f=>f.supported&&(!f.hasValue||overwrite));
  const records=new Map(fields.map(f=>[f.id,{fieldId:f.id,status:f.supported?(f.hasValue&&!overwrite?'skipped':'pending'):'skipped',reason:f.supported?'已有内容，已跳过':f.reason||'不支持的控件',history:[]}]))
  if(!target.length)return [...records.values()];
@@ -93,6 +93,14 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
   const {fills}=validateDeepseekFills({fills:[{fieldId:field.id,value,evidence:[{sourceId:range.sourceId,quote:range.text}],reason:'使用同一字段与经历中已确认的资料，仅作确定性格式适配'}]},[field],sources);
   if(!fills.length||wasRejected(field,fills[0].value,rejectedAnswers))continue;
   const record=records.get(field.id);record.proposal=fills[0];record.status='approved';record.reason='已确认资料与字段身份、原文和格式核验通过，等待填写';record.route={...range,rangeId:range.id};record.review={approved:true,policy:'fact',method:'confirmed',reasons:[]};
+ }
+ if(fastMode&&planCache){
+  for(const field of target){
+   const record=records.get(field.id);if(record.status==='approved')continue;
+   const proposal=planCache.get(field);if(!proposal||localConcerns(field,proposal,entries).length)continue;
+   record.proposal=proposal;record.status='approved';record.uncertain=true;record.cacheHit=true;
+   record.review={approved:true,method:'cache',reasons:[]};record.reason='上次成功方案已通过本地重新核验，填后仍标橙待确认';
+  }
  }
  let pending=target.filter(f=>records.get(f.id).status!=='approved');
  for(let round=0;round<(fastMode?1:2)&&pending.length;round++){
@@ -167,6 +175,7 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
   if(record.status!=='approved')continue;checkSignal(signal);await assertFresh();emit('fill',`正在填入并核验：${seenFields.get(record.fieldId).label}`);
   const result=await apply(seenFields.get(record.fieldId),record.proposal.value,{uncertain:!!record.uncertain});
   record.status=result.ok?(record.uncertain?'filled_review':'filled'):'failed';record.reason=(result.ok&&record.uncertain?'已填入 · 待你确认。':'')+result.reason;
+  if(result.ok&&fastMode&&planCache&&record.review?.method!=='confirmed'){try{await planCache.put(seenFields.get(record.fieldId),record.proposal);}catch{record.cacheWriteFailed=true;record.reason+=' 本次已填入，但加速记录未保存。';}}
  }
  emit('complete','协作完成');return [...records.values()];
 }

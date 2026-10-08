@@ -1,6 +1,6 @@
 import {AppError,importDiagnostic,diagnosticEnvironment} from './diagnostics.js';
 import {validateLearnedFacts,LEARN_CATEGORIES} from './learned.js';
-import {listMaterials,saveMaterial,deleteMaterial,clearMaterials,getRejectedAnswers,getLearnedFacts,setLearnedFacts} from './storage.js';
+import {listMaterials,saveMaterial,deleteMaterial,getRejectedAnswers,getLearnedFacts,setLearnedFacts} from './storage.js';
 import {decodeText} from './text-material.js';
 import {BASE_FIELDS,RECORD_FIELDS,emptyProfile,basicFromText} from './core.js';
 import {getDocument,GlobalWorkerOptions} from 'pdfjs-dist/build/pdf.mjs';
@@ -42,7 +42,7 @@ $('view-pdf').onclick=()=>{try{const url=resumeURL();window.open(url,'_blank','n
 $('download-pdf').onclick=()=>{try{const url=resumeURL();const link=document.createElement('a');link.href=url;link.download=savedResume.name;link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);}catch(e){status(e.message,true);}};
 $('replace-material').onclick=()=>$('replace-file').click();
 $('delete-pdf').onclick=async()=>{if(pdfBusy||!savedResume||!confirm('删除选中的本地素材及其提取文本？其他素材、个人资料和备注会保留。'))return;try{await deleteMaterial(activeId);await refreshResume();status('已删除选中的素材，其他资料与备注仍保留。');}catch(e){status(e.message,true);}};
-$('clear').onclick=async()=>{if(pdfBusy||!confirm('清除当前浏览器中保存的个人资料、已学习资料、零散备注和全部 PDF / TXT 素材？各服务的 API key 可在侧栏单独清除。'))return;try{await clearMaterials();await chrome.storage.local.remove(['profile','learnedFacts','rejectedAnswers']);pendingLearnedImport=null;await renderLearned();await renderRejections();profile=emptyProfile();render();await refreshResume();status('已清除个人资料、备注和全部素材。');}catch(e){status('清除未完成：'+e.message,true);}};
+$('clear').onclick=async()=>{if(pdfBusy||!confirm('清除当前浏览器中保存的个人资料、已学习资料、零散备注和全部 PDF / TXT 素材？各服务的 API key 可在侧栏单独清除。'))return;try{const cleared=await chrome.runtime.sendMessage({action:'clear-personal-data'});if(!cleared?.ok)throw Error(cleared?.error||'扩展未响应');pendingLearnedImport=null;await renderLearned();await renderRejections();profile=emptyProfile();render();await refreshResume();status('已清除个人资料、备注和全部素材。');}catch(e){status('清除未完成：'+e.message,true);}};
 async function importMaterial(file,replaceId){
  let task,doc,record,persisted=false,textReady=false,stage='validate',id=replaceId||crypto.randomUUID();
  const kind=file.name.toLowerCase().endsWith('.txt')?'txt':file.name.toLowerCase().endsWith('.pdf')?'pdf':null;
