@@ -1,20 +1,33 @@
 // Runs in the extension's isolated world. Keep all helpers inside this function.
 export async function pageBridge(args) {
   const capturing=args.action==='capture';
+  const detectTemplate=()=>{
+    const templates=args.platformTemplates||[],host=location.hostname;
+    const domains=templates.filter(t=>t.domains.some(d=>host===d||host.endsWith('.'+d)));
+    const layouts=templates.filter(t=>t.fingerprints.some(group=>group.every(selector=>document.querySelector(selector))));
+    if(layouts.length===1&&(!domains.length||domains.every(t=>t.id===layouts[0].id)))return {...layouts[0],mode:'template',matchedBy:domains.length?'domain+structure':'structure'};
+    if(layouts.length>1||layouts.length===1&&domains.length)return {id:'generic',label:'通用',revision:1,mode:'generic',reason:'页面结构与平台特征冲突，使用通用解析'};
+    const known=domains.length===1?domains[0]:null;
+    return {id:known?.id||'generic',label:known?.label||'通用',revision:known?.revision||1,mode:'generic',reason:known?'未验证当前模板结构，使用通用解析':'使用通用解析'};
+  };
+  const platform=args.action==='scan'||capturing?detectTemplate():globalThis.__jevApply?.platform||{id:'generic',label:'通用',mode:'generic'};
+  const template=platform.mode==='template'?platform:null;
+  const publicPlatform=()=>({id:platform.id,label:platform.label,revision:platform.revision,mode:platform.mode,matchedBy:platform.matchedBy,reason:platform.reason});
   const clean=s=>String(s??'').replace(/\s+/g,' ').trim().slice(0,220);
   // Moka uses CSS modules: match stable component prefixes, not build hashes.
   const mokaSelect='[class*="sd-Select-container-"]';
   const selectRoots='.phoenix-select,.ant-select,.el-select,.ant-cascader,.el-cascader,[role="combobox"],'+mokaSelect;
-  const recordRoots='.form,[class*="apply-fields-"],.form-cell-inner';
+  const recordRoots=template?.record||'.form,[class*="apply-fields-"],.form-cell-inner';
   const beisenRoots='.constant-main-selector-container,.area-selector-container,.phoenix-calendar';
   const popupRoots=beisenRoots+',[role="listbox"],.phoenix-selectList,[class*="sd-Select-menu-"],.ant-select-dropdown,.el-select-dropdown,.ant-cascader-menus,.ant-cascader-dropdown,.el-cascader__dropdown';
   const visible=el=>el?.isConnected&&el.getClientRects().length>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none'&&!el.closest('[inert],[hidden]')&&(capturing||!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.closest('.phoenix-select--disabled,.ant-select-disabled,.el-select.is-disabled,.ant-cascader-disabled,.el-cascader.is-disabled,[class*=sd-Select-containerDisabled-]')&&(!el.matches(mokaSelect)||!el.querySelector('input:disabled')));
   const labelText=node=>{const copy=node.cloneNode(true);for(const child of copy.querySelectorAll('input,select,textarea,button,[role="combobox"],script,style,.labelRequired,.anticon'))child.remove();return copy.textContent||'';};
-  const itemOf=el=>el.closest('.form-item,.ant-form-item,.el-form-item,.form-group,[class*=apply-field-]');
-  const itemLabel=el=>{const item=itemOf(el);const label=item?.querySelector('.form-item__text,.ant-form-item-label,.el-form-item__label,.control-label,[class*=title-],label');return label?labelText(label):'';};
+  const itemOf=el=>template?.field&&el.closest(template.field)||el.closest('.form-item,.ant-form-item,.el-form-item,.form-group,[class*=apply-field-]');
+  const itemLabel=el=>{const item=itemOf(el);const label=template?.fieldLabel&&item?.querySelector(template.fieldLabel)||item?.querySelector('.form-item__text,.ant-form-item-label,.el-form-item__label,.control-label,[class*=title-],label');return label?labelText(label):'';};
   const labelOf=el=>{
     const labelled=(el.getAttribute('aria-labelledby')||'').split(/\s+/).filter(Boolean).map(id=>document.getElementById(id)?.innerText||'').join(' ');
-    return clean(labelled||el.getAttribute('aria-label')||itemLabel(el)||Array.from(el.labels||[]).map(labelText).join(' ')||el.getAttribute('placeholder')||el.getAttribute('name')||'未命名字段').replace(/[\s*：:]+$/,'');
+    const label=clean(labelled||el.getAttribute('aria-label')||itemLabel(el)||Array.from(el.labels||[]).map(labelText).join(' ')||el.getAttribute('placeholder')||el.getAttribute('name')||'未命名字段').replace(/[\s*：:]+$/,'');
+    return el.matches(mokaSelect)&&template?.selectLabels?.[label]||label;
   };
   const datePartOf=el=>{
     const range=el.closest('.month-range-select');if(!range)return null;
@@ -24,10 +37,19 @@ export async function pageBridge(args) {
   };
   const dependentDefaults=globalThis.__jevDependentDefaults||(globalThis.__jevDependentDefaults=new WeakMap());
   const ownsDefault=(el,value)=>{const d=dependentDefaults.get(el);return !!d&&d.value===value&&d.year.isConnected&&d.year.querySelector('[class*=sd-Input-display-value-]')?.textContent.trim()===d.yearValue;};
-  const mokaLookup=el=>el.matches(mokaSelect)&&/^(学校名称|专业名称)$/.test(labelOf(el))&&/请输入/.test(el.querySelector('input')?.placeholder||'');
+  const mokaLookup=el=>el.matches(mokaSelect)&&(template?.lookupLabels||['学校名称','专业名称']).includes(labelOf(el))&&!!searchInput(el);
   const dateLabel=part=>`${part.boundary==='start'?'开始':part.boundary==='end'?'结束':''}${part.unit==='year'?'年份':'月份'}`;
   const groupLabel=el=>clean(itemLabel(el)||el.closest('fieldset')?.querySelector('legend')?.innerText||el.closest('[role="radiogroup"]')?.getAttribute('aria-label')||'');
+  const sectionTitle=scope=>{
+    const heading=scope.querySelector(template.heading);
+    return clean(heading?labelText(heading):'').replace(/[\uE000-\uF8FF]/g,'').replace(/\s*(?:必填|选填)[\s*]*$/,'').trim();
+  };
+  const recordForms=scope=>[...scope.querySelectorAll(recordRoots)].filter(form=>(!template||visible(form))&&(!template?.block||form.closest(template.block)===scope)&&(!form.parentElement?.closest(recordRoots)||!scope.contains(form.parentElement.closest(recordRoots))));
   const sectionInfo=el=>{
+    if(template?.block){
+      const scope=el.closest(template.block);
+      if(scope)return {title:sectionTitle(scope),scope,form:el.closest(template.record)};
+    }
     const hotjob=el.closest('.form-cell');
     if(hotjob)return {title:clean(hotjob.querySelector('.tit-wrap .tit p')?.textContent||hotjob.querySelector('.tit-wrap .tit')?.textContent),scope:hotjob,form:el.closest('.form-cell-inner')};
     const moka=el.closest('[class*="apply-block-"]');
@@ -51,7 +73,7 @@ export async function pageBridge(args) {
   };
   const contextOf=el=>{
     const {title,scope,form}=sectionInfo(el);if(!form)return title;
-    const siblings=[...(scope?.querySelectorAll(recordRoots)||[])];const index=siblings.indexOf(form);
+    const siblings=scope?recordForms(scope):[];const index=siblings.indexOf(form);
     const peers=[...form.querySelectorAll('.form-item__text,[class*=apply-field-] > [class*=title-]')].map(x=>clean(x.textContent)).filter(Boolean).slice(0,10);
     return [title,index>=0?`第 ${index+1} 条（页面顺序，同组字段属于同一经历）`:'',peers.length?'同组字段：'+peers.join('、'):''].filter(Boolean).join(' · ').slice(0,600);
   };
@@ -249,7 +271,7 @@ export async function pageBridge(args) {
     if(days.length!==1||calendarDisabled(days[0]))throw Error('[DATE_DISABLED] 目标日期不可选');press(days[0]);
   };
   const safeOptions=options=>options.length>0&&options.length<=250&&options.every(o=>o.value)&&new Set(options.map(o=>o.value)).size===options.length;
-  const sectionCategory=title=>({'教育背景':'education','教育经历':'education','实习经历':'internship','实习经验':'internship','工作经历':'work','工作经验':'work','工作/实习经历':'work','工作／实习经历':'work','项目经验':'project','项目经历':'project','课题项目经验':'project'}[title]);
+  const sectionCategory=title=>template?.sections?.[title]||({'教育背景':'education','教育经历':'education','实习经历':'internship','实习经验':'internship','工作经历':'work','工作经验':'work','工作/实习经历':'work','工作／实习经历':'work','项目经验':'project','项目经历':'project','课题项目经验':'project'}[title]);
   const addText=node=>clean(node.getAttribute('aria-label')||node.textContent).replace(/[\uE000-\uF8FF]/g,'').replace(/^[+＋]\s*/,'').replace(/\s+/g,'');
   const allowedAdd=(node,title,scope)=>{
     const action=node.closest('button,a,[role="button"]')||node;
@@ -265,7 +287,7 @@ export async function pageBridge(args) {
     for(const form of document.querySelectorAll(recordRoots)){
       if(!visible(form))continue;const control=form.querySelector('input,textarea,select,.phoenix-radio-group');if(!control)continue;
       const {title,scope}=sectionInfo(control),category=sectionCategory(title);if(!scope||!category||seen.has(scope))continue;seen.add(scope);
-      const forms=[...scope.querySelectorAll(recordRoots)].filter(visible);if(!forms.length)continue;
+      const forms=recordForms(scope).filter(visible);if(!forms.length)continue;
       const buttons=new Set();for(const node of scope.querySelectorAll('button,a,[role="button"],div,span')){const b=allowedAdd(node,title,scope);if(b&&scope.contains(b)&&!forms.some(f=>f.contains(b)))buttons.add(b);}
       const candidates=[...buttons].filter(b=>![...buttons].some(other=>b!==other&&b.contains(other)));
       const pending=globalThis.__jevApplyAddPending;
@@ -292,7 +314,7 @@ export async function pageBridge(args) {
     for(let i=0;i<30;i++){
       await pause(100);
       if(location.href!==state.url||document.title!==state.title||!current.scope.isConnected){pending.failed=true;return {ok:false,reason:'新增期间页面跳转或章节被替换，请手动核对'};}
-      const count=[...current.scope.querySelectorAll(recordRoots)].filter(visible).length;
+      const count=recordForms(current.scope).filter(visible).length;
       if(count===current.count)continue;
       const preserved=before.every(x=>x.el.isConnected&&x.el.value===x.value&&x.el.checked===x.checked)&&customs.every(x=>x.el.isConnected&&customValue(x)===x.value);
       if(count!==current.count+1||!preserved){pending.failed=true;return {ok:false,reason:'新增数量异常或原栏位发生变化，已停止自动操作，请手动核对'};}
@@ -301,7 +323,7 @@ export async function pageBridge(args) {
     return {ok:false,reason:'点击后 3 秒内未确认新增，已停止以避免重复添加；请等待页面完成或手动检查。'};
   }
   if(args.action==='scan'||capturing){
-    const state={token:args.token,url:location.href,title:document.title,entries:new Map()};globalThis.__jevApply=state;
+    const state={token:args.token,url:location.href,title:document.title,platform,entries:new Map()};globalThis.__jevApply=state;
     const fields=[],seenRadios=new Set(),capturedGroups=new Set();
     const elements=document.querySelectorAll('input,textarea,select,'+selectRoots+',.phoenix-radio-group,[role="radiogroup"]');
     for(const el of elements){
@@ -343,7 +365,8 @@ export async function pageBridge(args) {
               if(!supported)reason='[SELECT_MULTI] 弹窗不是可确认的单选模式，需手动处理';
             }else if(!calendar){
               options=(await stableOptions(popup)).map(({node,...o})=>o);
-              selectionMode=isCascade(el)?'cascade':searchInput(el)?'search':scrollArea(popup)?'virtual':'list';
+              // Moka's fixed menus have editable filter inputs but are not open-ended lookups.
+              selectionMode=template?.id==='moka'&&el.matches(mokaSelect)&&safeOptions(options)&&(datePart||template.catalogLabels?.includes(labelOf(el)))?'list':isCascade(el)?'cascade':searchInput(el)?'search':scrollArea(popup)?'virtual':'list';
               supported=popup.getAttribute('aria-multiselectable')!=='true'&&(safeOptions(options)||!options.length&&selectionMode==='search');
             }
             await closePopup(el);
@@ -374,12 +397,14 @@ export async function pageBridge(args) {
         if(!capturedValue.trim()||/^(请选择|please select|select|choose)(?:\s|$)/i.test(capturedValue)||capturedValue.length>10000)continue;
         if(label==='未命名字段')captureWarning='未识别到字段标题，请先补全名称。';
       }
-      fields.push({id,label,datePart,snapshotValue:String(current??''),currentValue:hasValue?current:'',...(globalThis.__jevReviewValues?.get(el)||{}),...(capturing?{capturedValue,captureWarning}:{}),name:clean(el.name),type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required||el.getAttribute('aria-required')==='true'||!!item?.querySelector('.form-item__required'),maxLength,hasValue,options,selectionMode,supported,reason:supported?'':type==='file'?'附件需要手动上传':reason});state.entries.set(id,entry);
+      const section=sectionInfo(el),category=template?.sections?.[section.title],record=section.scope&&section.form?recordForms(section.scope).indexOf(section.form)+1:0;
+      const sourceRecord=category&&record>0?{category,record}:undefined;
+      fields.push({id,label,datePart,...(sourceRecord?{sourceRecord}:{}),platform:publicPlatform(),snapshotValue:String(current??''),currentValue:hasValue?current:'',...(globalThis.__jevReviewValues?.get(el)||{}),...(capturing?{capturedValue,captureWarning}:{}),name:clean(el.name),type,context:contextOf(el),placeholder:clean(el.placeholder),required:el.required||el.getAttribute('aria-required')==='true'||!!item?.querySelector('.form-item__required'),maxLength,hasValue,options,selectionMode,supported,reason:supported?'':type==='file'?'附件需要手动上传':reason});state.entries.set(id,entry);
       if(fields.length>=(capturing?300:100))break;
     }
     const sections=discoverSections();state.sections=new Map(sections.map(s=>[s.id,s]));
     const experienceCategories=[...new Set([...document.querySelectorAll(recordRoots)].map(form=>{const c=form.querySelector('input,textarea,select,.phoenix-radio-group');return c?sectionCategory(sectionInfo(c).title):null;}).concat([...document.querySelectorAll('h1,h2,h3,h4,[role=tab],[class*=blockTitle-]')].map(n=>sectionCategory(clean(labelText(n))))).filter(Boolean))];
-    return {fields,sections:sections.map(publicSection),experienceCategories,url:location.href,title:document.title,pageContext:{title:clean(document.title),headings:[...new Set([...document.querySelectorAll('h1,h2,h3')].map(x=>clean(x.innerText)).concat(fields.map(f=>f.context.split(' · ')[0])))].filter(Boolean).slice(0,20),description:clean(document.querySelector('meta[name="description"]')?.content)},atLimit:fields.length>=(capturing?300:100)};
+    return {platform:publicPlatform(),fields,sections:sections.map(publicSection),experienceCategories,url:location.href,title:document.title,pageContext:{platform:publicPlatform(),title:clean(document.title),headings:[...new Set([...document.querySelectorAll('h1,h2,h3')].map(x=>clean(x.innerText)).concat(fields.map(f=>f.context.split(' · ')[0])))].filter(Boolean).slice(0,20),description:clean(document.querySelector('meta[name="description"]')?.content)},atLimit:fields.length>=(capturing?300:100)};
   }
   if(['fill','verify','mark-review','read-current'].includes(args.action)){
     const state=globalThis.__jevApply;if(!state||state.token!==args.token||state.url!==location.href||state.title!==document.title)return {results:args.items.map(x=>({id:x.id,ok:false,reason:'页面已变化，请重新扫描'}))};

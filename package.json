@@ -1,6 +1,6 @@
 {
   "name": "jev-apply",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,7 +24,8 @@
     "test:manual": "node tests/manual.browser.mjs",
     "test:feedback": "node tests/feedback.browser.mjs",
     "test:cache": "node tests/cache.browser.mjs",
-    "test:late-change": "node tests/late-change.browser.mjs"
+    "test:late-change": "node tests/late-change.browser.mjs",
+    "test:platforms": "node tests/platform-templates.browser.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "^6.3.289"

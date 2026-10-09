@@ -1,3 +1,4 @@
+import {PLATFORM_TEMPLATES} from './platform-templates.js';
 import {PLAN_CACHE_KEY,mergePlanCache} from './plan-cache.js';
 import {pageBridge} from './page.js';
 import {mergeLearnedFacts,validateLearnedFacts,factKey} from './learned.js';
@@ -6,7 +7,7 @@ import {deepseekPayload,validateDeepseekFills} from './deepseek.js';
 chrome.action.onClicked.addListener(tab=>{if(tab.windowId!==undefined)chrome.sidePanel.open({windowId:tab.windowId}).catch(()=>{});});
 async function inject(tabId,args,frameIds){
   if(!Number.isInteger(tabId))throw Error('请先打开一个网申页面，再点击扩展图标。');
-  return chrome.scripting.executeScript({target:frameIds?{tabId,frameIds}:{tabId,allFrames:true},func:pageBridge,args:[args]});
+  return chrome.scripting.executeScript({target:frameIds?{tabId,frameIds}:{tabId,allFrames:true},func:pageBridge,args:[['scan','capture'].includes(args.action)?{...args,platformTemplates:PLATFORM_TEMPLATES}:args]});
 }
 async function handle(message){
   if(message.action==='clear-personal-data'){const saved=await chrome.storage.local.get('planCacheEpoch');await chrome.storage.local.set({planCacheEpoch:(saved.planCacheEpoch||0)+1});await clearMaterials();await chrome.storage.local.remove(['profile','learnedFacts','rejectedAnswers',PLAN_CACHE_KEY]);return {};}
@@ -22,7 +23,7 @@ async function handle(message){
     const fields=results.flatMap(r=>(r.result?.fields||[]).map(f=>({...f,localId:f.id,id:`${r.frameId}:${f.id}`,frameId:r.frameId})));
     const sections=results.flatMap(r=>(r.result?.sections||[]).map(s=>({...s,localId:s.id,id:`${r.frameId}:${s.id}`,frameId:r.frameId})));
     const experienceCategories=[...new Set(results.flatMap(r=>r.result?.experienceCategories||[]))];
-    return {token,fields,sections,experienceCategories,host:new URL(results.find(r=>r.frameId===0)?.result?.url||'https://unknown.invalid').hostname,pageContext:results.find(r=>r.frameId===0)?.result?.pageContext||{},limited,atLimit:results.some(r=>r.result?.atLimit),frameCount:results.length};
+    return {token,fields,sections,experienceCategories,platform:results.find(r=>r.frameId===0)?.result?.platform,host:new URL(results.find(r=>r.frameId===0)?.result?.url||'https://unknown.invalid').hostname,pageContext:results.find(r=>r.frameId===0)?.result?.pageContext||{},limited,atLimit:results.some(r=>r.result?.atLimit),frameCount:results.length};
   }
   if(message.action==='save-learning'){
     const current=await getLearnedFacts();

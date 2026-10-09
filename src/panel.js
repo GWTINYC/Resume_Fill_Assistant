@@ -144,7 +144,7 @@ async function scanCurrent(resetOverwrite=true){stopWatch();
  await profile(new URL(tab.url).hostname);
  const r=await message({action:'scan',tabId:tab.id});tabId=tab.id;pageHost=r.host;token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();if(resetOverwrite)$('overwrite').checked=false;
  for(const f of fields)setEntry(f,preferredLearned(f,entries).at(0)||localMapping(f,entries.filter(e=>learnedSourceAllowed(f,e)))||'','本地名称匹配');
- $('page-info').textContent=`${new URL(tab.url).hostname} · ${fields.length} 个可见字段 · ${r.frameCount} 个可访问框架`;
+ $('page-info').textContent=`${new URL(tab.url).hostname} · ${r.platform?.label||'通用'}${r.platform?.mode==='template'?'模板':'解析'} · ${fields.length} 个可见字段 · ${r.frameCount} 个可访问框架`;
  status(fields.length?`扫描完成。可一键协作填写，也可使用单模型或手动操作。${r.atLimit?' 单个框架最多扫描 100 项，请分步处理。':''}${r.limited?' 部分框架不可访问。':''}`:'没有找到可见表单。自定义控件、跨域框架或 Shadow DOM 可能需要网站专用适配。');render();
 }
 $('scan').onclick=async()=>{lock(true);try{await scanCurrent();}catch(e){fields=[];plan.clear();render();status(e.message,true);}finally{lock(false);updateCount();}};
