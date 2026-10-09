@@ -81,9 +81,10 @@ export function combineAudit(field,proposal,entries,checks){
 }
 function checkSignal(signal){if(signal?.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');}
 // Dependencies are injectable so the full workflow can be tested without live keys.
-export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,reviewExisting=false,fillUncertain=false,fastMode=false,rejectedAnswers=[],planCache=null,verifyWritten=null}){
- const target=fields.filter(f=>f.supported&&(!f.hasValue||overwrite||reviewExisting));
- const records=new Map(fields.map(f=>[f.id,{fieldId:f.id,status:f.supported?(f.hasValue&&!overwrite&&!reviewExisting?'skipped':'pending'):'skipped',reason:f.supported?'已有内容，已跳过':f.reason||'不支持的控件',history:[]}]))
+export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,reviewExisting=false,fillUncertain=false,fastMode=false,rejectedAnswers=[],planCache=null,verifyWritten=null,activeFieldIds=null,deferRelatedReview=false}){
+ const active=f=>!activeFieldIds||activeFieldIds.includes(f.id);
+ const target=fields.filter(f=>active(f)&&f.supported&&(!f.hasValue||overwrite||reviewExisting));
+ const records=new Map(fields.map(f=>[f.id,{fieldId:f.id,status:!active(f)?'deferred':f.supported?(f.hasValue&&!overwrite&&!reviewExisting?'skipped':'pending'):'skipped',reason:f.supported?'已有内容，已跳过':f.reason||'不支持的控件',history:[]}]))
  const seenFields=new Map(fields.map(f=>[f.id,f]));let auditCalls=0;
  const emit=(stage,message)=>onProgress({stage,message,records:[...records.values()]});
  // Known property + confirmed source + exact representation is stronger evidence than model confidence.
@@ -172,7 +173,7 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
   if(fillUncertain&&record.route?.uncertain&&record.status==='approved')record.uncertain=true;
  }
  if(reviewExisting)for(const record of records.values()){
-  const field=seenFields.get(record.fieldId);
+  const field=seenFields.get(record.fieldId);if(!active(field))continue;
   if(!field.supported){record.status='unsupported';record.warning=true;continue;}
   if(record.status==='needs_review'){record.warning=true;record.reason+=' 当前内容已保留，尚无可采用的素材答案。';}
   if(record.status==='approved'&&field.hasValue){
@@ -180,7 +181,8 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
    else{record.uncertain=true;record.corrected=true;record.reason='已有值与素材不一致，将纠正并标橙待确认';}
   }
  }
- for(const [id,issue] of relatedFieldWarnings(fields,records)){
+ for(const [id,issue] of (deferRelatedReview?[]:relatedFieldWarnings(fields,records))){
+  if(!active(seenFields.get(id)))continue;
   const record=records.get(id),field=seenFields.get(id);record.warning=true;record.ruleWarning=issue.reason;
   if(issue.block||!fastMode){record.status='needs_review';record.reason=issue.reason;}
   else if(record.status==='approved'){record.uncertain=true;record.reason=issue.reason;}
@@ -189,8 +191,8 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
  }
  // Write skill names before proficiency even when the page lists the controls in reverse order.
  for(const record of [...records.values()].sort((a,b)=>Number(/掌握程度|熟练程度/.test(seenFields.get(a.fieldId).label))-Number(/掌握程度|熟练程度/.test(seenFields.get(b.fieldId).label)))){
-  if(record.status!=='approved')continue;const dependency=relatedFieldWarnings(fields,records).get(record.fieldId);if(dependency?.block){record.status='needs_review';record.warning=true;record.reason=dependency.reason;continue;}checkSignal(signal);await assertFresh();emit('fill',`正在填入并核验：${seenFields.get(record.fieldId).label}`);
-  const result=await apply(seenFields.get(record.fieldId),record.proposal.value,{uncertain:!!record.uncertain,overwrite:overwrite||reviewExisting,...(reviewExisting?{expectedCurrent:seenFields.get(record.fieldId).currentValue||''}:{})});
+  if(record.status!=='approved')continue;const dependency=deferRelatedReview?null:relatedFieldWarnings(fields,records).get(record.fieldId);if(dependency?.block){record.status='needs_review';record.warning=true;record.reason=dependency.reason;continue;}checkSignal(signal);await assertFresh();emit('fill',`正在填入并核验：${seenFields.get(record.fieldId).label}`);
+  const result=await apply(seenFields.get(record.fieldId),record.proposal.value,{uncertain:!!record.uncertain,overwrite:overwrite||reviewExisting,...(reviewExisting?{expectedCurrent:seenFields.get(record.fieldId).expectedCurrent??seenFields.get(record.fieldId).snapshotValue??seenFields.get(record.fieldId).currentValue??''}:{})});
   record.status=result.ok?(record.uncertain?'filled_review':'filled'):'failed';record.warning=record.warning||!result.ok;record.reason=(result.ok&&record.uncertain?'已填入 · 待你确认。':'')+result.reason+(record.ruleWarning?' '+record.ruleWarning:'');
 
  }
@@ -201,7 +203,8 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
   if(written.length)await reconcileWritten([...records.values()],await verifyWritten(written.map(r=>({...seenFields.get(r.fieldId),value:r.proposal.value}))),fields,planCache);
  }
  // Re-evaluate existing dependent values after a proposed peer fails or disappears at readback.
- for(const [id,issue] of relatedFieldWarnings(fields,records)){
+ for(const [id,issue] of (deferRelatedReview?[]:relatedFieldWarnings(fields,records))){
+  if(!active(seenFields.get(id)))continue;
   const record=records.get(id),field=seenFields.get(id);if(record.ruleWarning===issue.reason)continue;
   record.warning=true;record.ruleWarning=issue.reason;record.reason=issue.reason;
   if(['filled','filled_review'].includes(record.status))record.status='filled_review';

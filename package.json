@@ -1,11 +1,11 @@
 {
   "name": "jev-apply",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test tests/core.test.mjs tests/plan-cache.test.mjs tests/field-review.test.mjs",
+    "test": "node --test tests/core.test.mjs tests/plan-cache.test.mjs tests/field-review.test.mjs tests/sequential.test.mjs",
     "test:browser": "node tests/browser.mjs",
     "test:deepseek": "node tests/deepseek.browser.mjs",
     "test:collaboration": "node tests/collaboration.browser.mjs",

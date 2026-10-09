@@ -4,7 +4,7 @@ import {pcKeyHint} from './native-keys.js';
 import {mergeLearnedFacts,confirmationFacts,captureDraft,LEARN_CATEGORIES,learningProperty,factKey,learnedEntries,preferredLearned,learnedSourceAllowed} from './learned.js';
 import {routeExperienceFields} from './experience-routing.js';
 import {ensureRecordSlots} from './record-slots.js';
-import {runCollaboration} from './collaboration.js';
+import {runSequentialFill} from './sequential.js';
 import {getApiKey,setApiKey,clearApiKey,getProvider,setProvider,listMaterials,materialsSnapshot,getRejectedAnswers,getLearnedFacts,connectPcKeys} from './storage.js';
 import {profileEntries,localMapping,defaultFieldValue,mappingPayload,optionPayload,acceptedChoice} from './core.js';
 import {applicantSources,DEEPSEEK_MODEL} from './deepseek.js';
@@ -226,7 +226,7 @@ async function rejectAnswer(field){lock(true);try{
  }catch(e){status(e.message,true);}finally{lock(false);render();}}
 function showCollaboration(progress){
  for(const record of progress.records){
-  if(!record.proposal){const current=plan.get(record.fieldId);if(current){current.checked=false;current.result=['needs_review','unsupported'].includes(record.status)?record.reason:undefined;current.pendingConfirmation=current.pendingConfirmation||!!record.warning;}continue;}
+  if(!record.proposal){const current=plan.get(record.fieldId);if(current){current.checked=false;current.result=['needs_review','unsupported','failed'].includes(record.status)?record.reason:undefined;current.pendingConfirmation=current.pendingConfirmation||!!record.warning;}continue;}
   const labels={unchanged:'已核对，内容一致',unsupported:'暂不适用或不支持',checking:'等待核验',approved:'核验通过',needs_review:'需人工核对',filled:'协作已填入',filled_review:'已填入 · 待确认',failed:'网页核验未通过'};
   const p={entryId:'',value:record.proposal.value,source:labels[record.status]||'协作草案',ai:true,evidence:record.proposal.evidence,reason:record.proposal.reason,checked:false,result:record.reason,pendingConfirmation:record.status==='filled_review'||!!record.warning,failedReview:record.status==='failed',filledValue:(['filled','filled_review'].includes(record.status)||record.warning&&fields.find(f=>f.id===record.fieldId)?.hasValue&&fields.find(f=>f.id===record.fieldId)?.currentValue===record.proposal.value)?record.proposal.value:null};
   if(p.filledValue){const field=fields.find(f=>f.id===record.fieldId);if(field)field.hasValue=true;}
@@ -251,7 +251,8 @@ $('collaborate').onclick=async()=>{
   const [cacheTab]=await chrome.tabs.query({active:true,currentWindow:true});await assertFresh();
   let cacheEpoch=0;
   const planCache=$('fill-uncertain').checked?await createPlanCache({fields,sources,pageUrl:cacheTab.url,pageContext,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),load:async()=>{const saved=await chrome.storage.local.get([PLAN_CACHE_KEY,'planCacheEpoch']);cacheEpoch=saved.planCacheEpoch||0;return saved[PLAN_CACHE_KEY]||[];},save:rows=>message({action:'cache-plans',rows,epoch:cacheEpoch}),remove:keys=>message({action:'invalidate-cache',keys})}):null;
-  const result=await runCollaboration({fields,sources,entries,pageContext,overwrite,reviewExisting,planCache,fillUncertain:$('fill-uncertain').checked,fastMode:$('fill-uncertain').checked,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),signal:controller.signal,assertFresh,onProgress:showCollaboration,
+  const result=await runSequentialFill({fields,sources,entries,pageContext,overwrite,reviewExisting,planCache,fillUncertain:$('fill-uncertain').checked,fastMode:$('fill-uncertain').checked,rejectedAnswers:rejectedAnswers.filter(x=>x.host===pageHost),signal:controller.signal,assertFresh,onProgress:showCollaboration,
+    readField:async f=>{const r=await message({action:'read-current',tabId,token,items:[f]});return r.results?.find(x=>x.id===f.id)||{ok:false,reason:'控件未返回当前值'};},
     draft:async(batch,workflow)=>{const r=await message({action:'deepseek-fill',fields:batch,sources,workflow});usage.deepseekInput+=r.usage?.prompt_tokens||0;usage.deepseekOutput+=r.usage?.completion_tokens||0;return r;},
     judge:async payload=>{const r=await message({action:'evaluate',payload});usage.jev+=r.usage?.input_tokens||0;return r;},
     verifyWritten:async items=>{await new Promise(r=>setTimeout(r,1200));await assertFresh();return (await message({action:'verify',tabId,token,items})).results||[];},
