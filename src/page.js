@@ -22,6 +22,9 @@ export async function pageBridge(args) {
     if(index<0||![2,4].includes(controls.length))return null;
     return {unit:index%2?'month':'year',boundary:controls.length===4?(index<2?'start':'end'):'single'};
   };
+  const dependentDefaults=globalThis.__jevDependentDefaults||(globalThis.__jevDependentDefaults=new WeakMap());
+  const ownsDefault=(el,value)=>{const d=dependentDefaults.get(el);return !!d&&d.value===value&&d.year.isConnected&&d.year.querySelector('[class*=sd-Input-display-value-]')?.textContent.trim()===d.yearValue;};
+  const mokaLookup=el=>el.matches(mokaSelect)&&/^(学校名称|专业名称)$/.test(labelOf(el))&&/请输入/.test(el.querySelector('input')?.placeholder||'');
   const dateLabel=part=>`${part.boundary==='start'?'开始':part.boundary==='end'?'结束':''}${part.unit==='year'?'年份':'月份'}`;
   const groupLabel=el=>clean(itemLabel(el)||el.closest('fieldset')?.querySelector('legend')?.innerText||el.closest('[role="radiogroup"]')?.getAttribute('aria-label')||'');
   const sectionInfo=el=>{
@@ -326,6 +329,7 @@ export async function pageBridge(args) {
         const multi=(el.classList.contains('phoenix-select--multi')||!!el.querySelector('[class*=sd-Tag-]'))||el.matches('.ant-select-multiple,.ant-select-enabled.ant-select-multiple')||!!el.querySelector('.el-select__tags,.ant-select-selection--multiple,.ant-select-selection__choice,.el-tag')||el.getAttribute('aria-multiselectable')==='true';
         const calendar=!!el.querySelector('use[href*="field_date_time_picker"],use[*|href*="field_date_time_picker"]');
         if(multi)reason='[SELECT_MULTI] 当前为多选控件，需手动确认各选项';
+        else if(mokaLookup(el)){selectionMode='search';kind='moka-lookup';supported=!!searchInput(el);options=[];}
         else {
           const popup=await openPopup(el);
           if(popup){
@@ -352,8 +356,9 @@ export async function pageBridge(args) {
       if(el.tagName==='SELECT'){supported=!el.multiple;options=[...el.options].map(o=>({value:o.value,label:clean(o.textContent),disabled:o.disabled||o.parentElement?.disabled===true}));}
       if(radios)options=radios.map(o=>({value:o.value,label:clean(o.closest('label')?labelText(o.closest('label')):labelOf(o)),disabled:!visible(o)}));
       if(options?.length>250||options&&new Set(options.map(o=>o.value)).size!==options.length)supported=false;
-      const id='f'+fields.length,entry={el,radios,kind,selectionMode,calendarType,signature:signature(el,!!radios),options};
-      const current=kind?customValue(entry):radios?(radios.find(x=>x.checked)?.value||''):(el.value||'');let hasValue=!!current;
+      const id='f'+fields.length,entry={el,radios,kind,selectionMode,calendarType,scope:itemOf(el),fieldLabel:labelOf(el),context:contextOf(el),signature:signature(el,!!radios),options};
+      const current=kind?customValue(entry):radios?(radios.find(x=>x.checked)?.value||''):(el.value||'');let hasValue=!!current&&!ownsDefault(el,current);
+      if(datePart?.unit==='month'&&!globalThis.__jevDefaultListeners?.has(el)){(globalThis.__jevDefaultListeners||(globalThis.__jevDefaultListeners=new WeakSet())).add(el);el.addEventListener('pointerdown',event=>{if(event.isTrusted)dependentDefaults.delete(el);},true);}
       if(el.tagName==='SELECT'){const selected=el.selectedOptions[0];if(selected&&(/^(请选择|选择|please select|select|choose|--)/i.test(clean(selected.textContent))||selected.disabled))hasValue=false;}
       const item=itemOf(el);const maxLength=el.maxLength>0?el.maxLength:Number(item?.querySelector('.phoenix-textarea')?.textContent.match(/\/\s*(\d+)/)?.[1])||null;
       let capturedValue,captureWarning;
@@ -380,7 +385,14 @@ export async function pageBridge(args) {
     const state=globalThis.__jevApply;if(!state||state.token!==args.token||state.url!==location.href||state.title!==document.title)return {results:args.items.map(x=>({id:x.id,ok:false,reason:'页面已变化，请重新扫描'}))};
     const results=[];
     for(const item of args.items){
-      const entry=state.entries.get(item.id);if(!entry){results.push({id:item.id,ok:false,reason:'字段已失效'});continue;}const {el,radios,kind}=entry;
+      const entry=state.entries.get(item.id);if(!entry){results.push({id:item.id,ok:false,reason:'字段已失效'});continue;}
+      // Moka remounts the major control after school selection and after custom-name commit.
+      // Rebind only inside the same surviving field/record, never by page-wide label matching.
+      if(!entry.el.isConnected&&/^(学校名称|专业名称)$/.test(entry.fieldLabel)&&entry.scope?.isConnected&&entry.scope.closest('[class*=apply-block-]')){
+        const matches=[...entry.scope.querySelectorAll(mokaSelect+',input')].filter(n=>visible(n)&&!n.parentElement?.closest(mokaSelect)&&labelOf(n)===entry.fieldLabel&&contextOf(n)===entry.context);
+        if(matches.length===1){const replacement=matches[0];entry.el=replacement;entry.kind=replacement.matches(mokaSelect)?'moka-lookup':null;entry.selectionMode=entry.kind?'search':null;entry.options=entry.kind?[]:undefined;entry.signature=signature(replacement,false);}
+      }
+      const {el,radios,kind}=entry;
       if((args.action!=='fill'?!el.isConnected:(!visible(el)||el.readOnly&&!kind))||signature(el,!!radios)!==entry.signature){results.push({id:item.id,ok:false,reason:'字段已变化，请重新扫描'});continue;}
       if(args.action==='mark-review'){
         const node=kind?el:el.closest('label')||el;
@@ -394,13 +406,16 @@ export async function pageBridge(args) {
       const current=kind?customValue(entry):radios?radios.find(x=>x.checked)?.value:el.value;
       if(args.action==='read-current'){results.push({id:item.id,ok:true,value:String(current??'')});continue;}
       if(args.action==='verify'){const valid=radios?radios.every(x=>x.validity.valid):!el.validity||el.validity.valid;const ok=(kind?selectedEquals(entry,String(item.value)):String(current??'')===String(item.value))&&valid;results.push({id:item.id,ok,reason:ok?'已填入并读取核验一致':!valid?'网页格式校验未通过，请检查':'网页未保留预期值，请手动检查'});continue;}
+      if(Object.prototype.hasOwnProperty.call(item,'expectedCurrent')&&String(current??'')!==String(item.expectedCurrent)&&!ownsDefault(el,current)){results.push({id:item.id,ok:false,reason:'[REVIEW_CHANGED] 核对期间网页内容发生变化，已保留新值，请重新核对'});continue;}
       const placeholder=el.tagName==='SELECT'&&el.selectedOptions[0]&&(/^(请选择|选择|please select|select|choose|--)/i.test(clean(el.selectedOptions[0].textContent))||el.selectedOptions[0].disabled);
-      if(current&&!placeholder&&!args.overwrite){results.push({id:item.id,ok:false,reason:'已有内容，已跳过'});continue;}
+      if(current&&!placeholder&&!args.overwrite&&!ownsDefault(el,current)){results.push({id:item.id,ok:false,reason:'已有内容，已跳过'});continue;}
       if(!['string','number'].includes(typeof item.value)){results.push({id:item.id,ok:false,reason:'无有效值'});continue;}const value=String(item.value);if(value.length>10000){results.push({id:item.id,ok:false,reason:'值过长'});continue;}
       let target=el;
+      const part=datePartOf(el),range=el.closest('.month-range-select');
+      const defaultPeers=part?.unit==='year'?[...state.entries.values()].filter(e=>e.el.closest('.month-range-select')===range&&datePartOf(e.el)?.unit==='month'&&datePartOf(e.el)?.boundary===part.boundary&&!customValue(e)):[];
       try{
         if(kind){
-          const dynamic=kind==='beisen-calendar'||['search','virtual','cascade'].includes(entry.selectionMode);
+          const dynamic=kind==='moka-lookup'||kind==='beisen-calendar'||['search','virtual','cascade'].includes(entry.selectionMode);
           if(!dynamic&&!entry.options?.some(o=>!o.disabled&&o.value===value))throw Error('[SELECT_VALUE] 没有经过扫描确认的对应选项');
           if(kind==='custom-radio'){
             const matches=[...el.querySelectorAll(radioSelector)].filter(n=>!disabled(n)&&visible(n)&&clean(n.textContent)===value);
@@ -408,14 +423,18 @@ export async function pageBridge(args) {
           }else{
             let popup,input,oldQuery,searched=false,clicked=false;
             try{
-              popup=await openPopup(el);if(!popup)throw Error('[SELECT_POPUP] 无法打开对应下拉菜单');
+              if(kind==='moka-lookup'){
+                input=searchInput(el);oldQuery=input.value;searched=true;press(el);input.focus();textInput(input,value);
+                popup=await waitUntil(()=>popupFor(el),'SELECT_SEARCH','输入搜索词后未出现候选菜单');await pause(450);
+              }else popup=await openPopup(el);
+              if(!popup)throw Error('[SELECT_POPUP] 无法打开对应下拉菜单');
               if(kind==='beisen-calendar'){await chooseCalendar(entry,popup,value);clicked=true;}
               else if(kind==='beisen-select'){await chooseBeisen(entry,popup,value);clicked=true;}
               else if(kind==='beisen-area'){await chooseBeisenArea(entry,popup,value);clicked=true;}
               else if(entry.selectionMode==='cascade'){await chooseCascade(el,popup,value);clicked=true;}
               else{
                 input=searchInput(el);let option=await seekOption(popup,value);
-                if(!option&&entry.selectionMode==='search'&&input){
+                if(!option&&!searched&&entry.selectionMode==='search'&&input){
                   oldQuery=input.value;input.focus();Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true,composed:true}));searched=true;
                   // Remote searches debounce and then replace their options. Never choose from stale results.
                   await pause(450);popup=popupFor(el)||popup;
@@ -423,8 +442,21 @@ export async function pageBridge(args) {
                 for(let attempt=0;attempt<(searched?4:1)&&!option;attempt++){
                   popup=popupFor(el)||popup;option=await seekOption(popup,value);if(!option&&searched)await pause(200);
                 }
-                if(!option)throw Error('[SELECT_NO_MATCH] 搜索或滚动后没有唯一对应的可用选项，请核对素材与网页选项');
-                press(option.node);clicked=true;
+                if(!option&&kind==='moka-lookup'){
+                  const label=labelOf(el),scope=itemOf(el),expected=label==='学校名称'?'添加学校全称':'添加专业全称';
+                  const add=[...popup.querySelectorAll('*')].filter(n=>visible(n)&&!n.children.length&&n.textContent.trim()===expected);
+                  if(add.length===1){
+                    press(add[0]);const replacement=await waitUntil(()=>{const inputs=[...scope.querySelectorAll('input')].filter(n=>visible(n)&&!n.closest(mokaSelect)&&/全称/.test(n.placeholder));return inputs.length===1?inputs[0]:null;},'SELECT_CUSTOM','未出现唯一的全称输入框');
+                    if(replacement.value&&replacement.value!==value)throw Error('[SELECT_CUSTOM] 全称框已有不同内容，未覆盖');
+                    press(replacement);replacement.focus();await pause(120);textInput(replacement,value);await pause(80);
+                    const customScope=replacement.closest('[class*=custom-option-]');
+                    const confirmations=[...customScope?.querySelectorAll('button')||[]].filter(n=>visible(n)&&!n.disabled&&n.textContent.trim()==='添加');
+                    if(confirmations.length!==1)throw Error('[SELECT_CUSTOM_CONFIRM] 全称尚未提交：未找到该专业/学校选项内唯一的添加按钮');
+                    press(confirmations[0]);clicked=true;
+                  }
+                }
+                if(!option&&!clicked)throw Error('[SELECT_NO_MATCH] 搜索或滚动后没有唯一对应的可用选项，请核对素材与网页选项');
+                if(option){press(option.node);clicked=true;}
               }
               for(let i=0;i<20&&!selectedEquals(entry,value);i++)await pause(80);
               if(!selectedEquals(entry,value))throw Error('[SELECT_NOT_COMMITTED] 已点击选项，但网页未保留预期选择');
@@ -456,6 +488,8 @@ export async function pageBridge(args) {
           let blurred=false;const sawBlur=()=>{blurred=true;};target.addEventListener('blur',sawBlur);target.blur();target.removeEventListener('blur',sawBlur);
           if(!blurred&&!radios){target.dispatchEvent(new FocusEvent('blur',{composed:true}));target.dispatchEvent(new FocusEvent('focusout',{bubbles:true,composed:true}));}
         }
+        if(part?.unit==='month')dependentDefaults.delete(el);
+        for(const peer of defaultPeers){const changed=customValue(peer);if(changed)dependentDefaults.set(peer.el,{value:changed,year:el,yearValue:value});}
         results.push({id:item.id,ok:true,reason:target.validity&&!target.validity.valid?'已填入，但网页格式校验未通过，请检查':'已填入'});
       }catch(e){results.push({id:item.id,ok:false,reason:e.message||'填写失败'});}
     }

@@ -81,6 +81,7 @@ export function validateDeepseekFills(data,fields,sources,workflow={}){
     else value=['date','month','number'].includes(f.type)?defaultFieldValue(f,x.value):x.value;
     if(value===null){rejected++;continue;}
     if(!isVerbatimValue(f,value,evidence,sources)){rejected++;issues.push({fieldId:f.id,reason:'待填文本必须是所引素材中的连续原文，不得改写、翻译、拼接或补充；请重新匹配素材段落。'});continue;}
+    if(['text','email','tel','url','search'].includes(f.type)&&/[\r\n]/.test(value)){rejected++;issues.push({fieldId:f.id,reason:'[SINGLE_LINE] 此项为单行输入框，不能原样填入多行段落；请匹配简短职位或角色原文，不会压缩改写。'});continue;}
     if(f.maxLength>0&&value.length>f.maxLength){rejected++;issues.push({fieldId:f.id,reason:'原文超过网页长度上限，请留待人工核对，不要缩写、删减或改写。'});continue;}
     if(f.type==='date'||f.type==='month'){
       const [year,month,day]=value.split('-').map(Number);const date=new Date(Date.UTC(year,month-1,day||1));

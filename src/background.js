@@ -48,7 +48,7 @@ async function handle(message){
     const result=results[0]?.result;if(!result?.ok)throw Error(result?.reason||'未确认新增成功');return result;
   }
   if(['fill','verify','mark-review','read-current'].includes(message.action)){
-    const frames=new Map();for(const item of message.items){if(!frames.has(item.frameId))frames.set(item.frameId,[]);frames.get(item.frameId).push({id:item.localId,value:item.value,mark:item.mark});}
+    const frames=new Map();for(const item of message.items){if(!frames.has(item.frameId))frames.set(item.frameId,[]);frames.get(item.frameId).push({id:item.localId,value:item.value,mark:item.mark,...(Object.prototype.hasOwnProperty.call(item,'expectedCurrent')?{expectedCurrent:item.expectedCurrent}:{})});}
     const all=[];
     for(const [frameId,items]of frames){
       try{const out=await inject(message.tabId,{action:message.action,token:message.token,overwrite:message.overwrite===true,items},[frameId]);for(const r of out)all.push(...(r.result?.results||[]).map(x=>({...x,id:`${frameId}:${x.id}`})));}

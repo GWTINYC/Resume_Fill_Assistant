@@ -24,7 +24,7 @@ export function relatedFieldWarnings(fields,records){
 export async function reconcileWritten(records,checks,fields,cache){
  const byId=new Map(fields.map(f=>[f.id,f])),byCheck=new Map(checks.map(x=>[x.id,x]));let changed=0;
  for(const record of records){
-  if(!['filled','filled_review'].includes(record.status))continue;
+  if(!['filled','filled_review','unchanged'].includes(record.status))continue;
   const checked=byCheck.get(record.fieldId);if(checked?.ok)continue;
   record.status='failed';record.warning=true;record.reason='[VALUE_CHANGED] '+(checked?.reason||'无法读取字段')+'；已撤销成功统计，请检查网页。若是你手动修改，可采用网页修改并记住。';changed++;
   try{await cache?.remove?.(byId.get(record.fieldId));}catch{record.reason+=' 加速记录移除失败，本轮不会再次使用。';}

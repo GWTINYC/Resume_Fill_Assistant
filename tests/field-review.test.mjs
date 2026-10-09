@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {relatedFieldWarnings,reconcileWritten} from '../src/field-review.js';
-import {runCollaboration} from '../src/collaboration.js';
+import {runCollaboration,localConcerns} from '../src/collaboration.js';
 const field=(id,label,context,currentValue='',type='text')=>({id,label,context,currentValue,hasValue:!!currentValue,type,supported:true});
 test('skill proficiency is held only when its own record name is missing',()=>{
  const fields=[field('name','技能名称','技能 · 第 1 条'),field('level','掌握程度','技能 · 第 1 条','熟练'),field('name2','技能名称','技能 · 第 2 条','Python')];
@@ -37,4 +37,17 @@ test('existing proficiency is flagged when the proposed skill name fails to pers
  const fields=[field('level','掌握程度','技能 · 第 1 条','熟练'),field('name','技能名称','技能 · 第 1 条')];
  const result=await runCollaboration({fields,sources:[{id:'notes',text:'Python'}],entries:[],fastMode:true,planCache:{get:f=>({fieldId:f.id,value:'Python',evidence:[{sourceId:'notes',quote:'Python'}]})},assertFresh:async()=>{},judge:noModel,draft:noModel,apply:async()=>({ok:false,reason:'name rejected'})});
  assert.equal(result[0].status,'needs_review');assert.equal(result[0].warning,true);assert.match(result[0].reason,/RELATED_EMPTY/);assert.equal(result[0].proposal.value,'熟练');
+});
+
+test('full review checks existing values, corrects differences, keeps no-source values and reports unsupported fields',async()=>{
+ const fields=[field('same','研究方向','其他信息','机器学习'),field('diff','个人能力','技能','旧文本'),field('unknown','期望薪资','个人信息','面议'),{...field('file','附件','其他信息'),supported:false,reason:'附件需要手动上传'}],applied=[],verified=[];
+ const sources=[{id:'notes',label:'备注',text:'机器学习\n熟悉JavaScript'}];
+ const result=await runCollaboration({fields,sources,entries:[],reviewExisting:true,fastMode:true,fillUncertain:true,planCache:{get:f=>['same','diff'].includes(f.id)?{fieldId:f.id,value:f.id==='same'?'机器学习':'熟悉JavaScript',evidence:[{sourceId:'notes',quote:f.id==='same'?'机器学习':'熟悉JavaScript'}]}:null},assertFresh:async()=>{},judge:async p=>({answers:Object.fromEntries(Object.keys(p.questions).map(k=>[k,{type:'choice',choice:'none',confidence:1,probabilities:{none:1}}]))}),draft:noModel,apply:async(f,value,options)=>{applied.push({id:f.id,value,options});return {ok:true,reason:'readback'}},verifyWritten:async items=>{verified.push(...items.map(x=>x.id));return items.map(x=>({id:x.id,ok:true}));}});
+ assert.deepEqual(applied.map(x=>x.id),['diff']);assert.equal(applied[0].options.expectedCurrent,'旧文本');assert.equal(applied[0].options.overwrite,true);assert.equal(result[0].status,'unchanged');assert.equal(result[1].status,'filled_review');assert.equal(result[2].status,'needs_review');assert.equal(result[2].warning,true);assert.equal(fields[2].currentValue,'面议');assert.equal(result[3].status,'unsupported');assert.deepEqual(verified,['same','diff']);
+});
+
+test('single-line role controls reject multiline responsibilities before page writes',()=>{
+ const proposal={value:'第一行职责。\n第二行职责。',evidence:[{sourceId:'notes',quote:'第一行职责。\n第二行职责。'}]};
+ assert(localConcerns(field('role','职责','项目经验'),proposal,[]).some(x=>x.includes('SINGLE_LINE')));
+ assert(!localConcerns({...field('role','项目中职责','项目经验'),type:'textarea'},proposal,[]).some(x=>x.includes('SINGLE_LINE')));
 });

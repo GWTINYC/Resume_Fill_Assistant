@@ -32,7 +32,7 @@ try{
  });
  let [worker]=ctx.serviceWorkers();if(!worker)worker=await ctx.waitForEvent('serviceworker',{timeout:20000});const id=new URL(worker.url()).host;
  await worker.evaluate(()=>chrome.storage.local.set({apiKey:'apikey_team_fixture',profile:{base:{fullName:'陈晓'},education:[],work:[],custom:[],notes:'个人技能：\n使用 React 完成前端项目，与团队沟通需求。\n熟悉 Git 协作。\n在旧公司实习，随后在新公司全职工作。\n现居上海。'}}));
- const target=await ctx.newPage();await target.goto(origin);const panel=await ctx.newPage();await panel.goto(`chrome-extension://${id}/panel.html`);await panel.locator('#profile-info').filter({hasText:'已保存'}).waitFor();
+ const target=await ctx.newPage();await target.goto(origin);const panel=await ctx.newPage();/* Legacy preserve-existing mode remains available. */await panel.addInitScript(()=>addEventListener('DOMContentLoaded',()=>{document.querySelector('#review-existing').checked=false;}));await panel.goto(`chrome-extension://${id}/panel.html`);await panel.locator('#profile-info').filter({hasText:'已保存'}).waitFor();
  await panel.locator('#fill-uncertain').uncheck();await target.bringToFront();await panel.locator('#collaborate').click();await panel.locator('#status').filter({hasText:'一键协作需要两套密钥'}).waitFor();assert.equal(log.length,0);assert.equal(await target.locator('[name=name]').inputValue(),'');
  await worker.evaluate(()=>chrome.storage.local.set({deepseekApiKey:'sk-team-fixture'}));await panel.reload();await panel.locator('#team-keys').filter({hasText:'DeepSeek：已配置 · Jev：已配置'}).waitFor();
  await panel.locator('#fill-uncertain').uncheck();await target.bringToFront();await panel.locator('#collaborate').click();await panel.locator('#status').filter({hasText:'协作完成：已填入并核验 3 项，待人工核对 1 项，填写失败 1 项，跳过 2 项'}).waitFor({timeout:30000});

@@ -41,6 +41,10 @@ export function localMapping(field,entries) {
 }
 export function defaultFieldValue(field,value) {
   value=String(value??'').trim();
+  if(field.datePart){
+    const date=value.match(/^(\d{4})[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?月?$/);
+    if(date&&Number(date[2])>=1&&Number(date[2])<=12)value=field.datePart.unit==='year'?date[1]:String(Number(date[2]));
+  }
   if(field.type==='date'||field.type==='month') {
     const match=value.match(/^(\d{4})[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?月?$/);
     if(!match)return null;

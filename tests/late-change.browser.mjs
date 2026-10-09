@@ -10,7 +10,7 @@ try{
  const target=await ctx.newPage();await target.goto(origin);
  // Reproduce side-panel focus: the first native blur emits no event.
  await worker.evaluate(async origin=>{const tab=(await chrome.tabs.query({})).find(t=>t.url?.startsWith(origin));await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{const el=document.querySelector('input');el.blur=()=>{delete el.blur;};}});},origin);
- const panel=await ctx.newPage();await panel.goto(`chrome-extension://${id}/panel.html`);
+ const panel=await ctx.newPage();/* Legacy preserve-existing mode remains available. */await panel.addInitScript(()=>addEventListener('DOMContentLoaded',()=>{document.querySelector('#review-existing').checked=false;}));await panel.goto(`chrome-extension://${id}/panel.html`);
  async function run(){await panel.locator('#team-keys').filter({hasText:'DeepSeek：已配置'}).waitFor();await target.bringToFront();await panel.locator('#collaborate').click();await panel.locator('#status').filter({hasText:'协作完成：已填入并核验 1 项'}).waitFor();}
  await run();assert((await target.evaluate(()=>blurs))>0);assert.equal((await worker.evaluate(()=>chrome.storage.local.get('executedPlanCache'))).executedPlanCache.length,1);
  await target.evaluate(()=>setTimeout(()=>document.querySelector('input').value='',2500));

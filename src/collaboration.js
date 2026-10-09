@@ -64,7 +64,7 @@ function numbers(text,date=false){
  return matches.map(s=>{const [a,b]=s.replaceAll(',','').split('.');const integer=a.replace(/^0+(?=\d)/,'');const fraction=b?.replace(/0+$/,'');return fraction?integer+'.'+fraction:integer;});
 }
 export function localConcerns(field,proposal,entries){
- const reasons=[];if(!isVerbatimValue(field,proposal.value,proposal.evidence))reasons.push('待填文本不是引用素材的连续原文，请重新匹配，不得改写、翻译、拼接或补充。');const id=localMapping(field,entries);const entry=entries.find(e=>e.id===id);
+ const reasons=[];if(['text','email','tel','url','search'].includes(field.type)&&/[\r\n]/.test(proposal.value))reasons.push('[SINGLE_LINE] 这是单行输入框，不能原样接收多行段落；请匹配简短职位/角色原文或手动确认，不会自动压缩改写。');if(!isVerbatimValue(field,proposal.value,proposal.evidence))reasons.push('待填文本不是引用素材的连续原文，请重新匹配，不得改写、翻译、拼接或补充。');const id=localMapping(field,entries);const entry=entries.find(e=>e.id===id);
  if(!proposal.evidence.some(e=>e.sourceId?.startsWith('learned:'))&&entry&&/^(?:base\.(?:fullName|givenName|familyName|englishName|email|phone|birthday|postalCode)|(?:education|work)\.\d+\.(?:start|end))$/.test(entry.id)){const expected=defaultFieldValue(field,entry.value);if(expected!==null&&(!field.options?.length)&&!/description|custom\./.test(entry.id)&&normalize(expected)!==normalize(proposal.value))reasons.push('与已保存的对应资料值不一致，请优先使用已确认的资料。');}
  if(!field.options?.length){const evidence=proposal.evidence.map(e=>e.quote).join('\n');const date=['date','month'].includes(field.type);const available=new Set(numbers(evidence,date));if(numbers(proposal.value,date).some(n=>!available.has(n)))reasons.push('答案含引用材料中没有的数字，不应新增指标、日期或数值。');}
  if(/工作年限|经验年限|年龄|years? of experience|\bage\b/i.test(field.label)&&!entry)reasons.push('该数值需要明确资料或确定性计算，请先补充对应资料项，不由模型估算。');
@@ -81,9 +81,9 @@ export function combineAudit(field,proposal,entries,checks){
 }
 function checkSignal(signal){if(signal?.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');}
 // Dependencies are injectable so the full workflow can be tested without live keys.
-export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,fillUncertain=false,fastMode=false,rejectedAnswers=[],planCache=null,verifyWritten=null}){
- const target=fields.filter(f=>f.supported&&(!f.hasValue||overwrite));
- const records=new Map(fields.map(f=>[f.id,{fieldId:f.id,status:f.supported?(f.hasValue&&!overwrite?'skipped':'pending'):'skipped',reason:f.supported?'已有内容，已跳过':f.reason||'不支持的控件',history:[]}]))
+export async function runCollaboration({fields,sources,entries,pageContext={},draft,judge,apply,assertFresh,onProgress=()=>{},signal,overwrite=false,reviewExisting=false,fillUncertain=false,fastMode=false,rejectedAnswers=[],planCache=null,verifyWritten=null}){
+ const target=fields.filter(f=>f.supported&&(!f.hasValue||overwrite||reviewExisting));
+ const records=new Map(fields.map(f=>[f.id,{fieldId:f.id,status:f.supported?(f.hasValue&&!overwrite&&!reviewExisting?'skipped':'pending'):'skipped',reason:f.supported?'已有内容，已跳过':f.reason||'不支持的控件',history:[]}]))
  const seenFields=new Map(fields.map(f=>[f.id,f]));let auditCalls=0;
  const emit=(stage,message)=>onProgress({stage,message,records:[...records.values()]});
  // Known property + confirmed source + exact representation is stronger evidence than model confidence.
@@ -171,24 +171,33 @@ export async function runCollaboration({fields,sources,entries,pageContext={},dr
   }
   if(fillUncertain&&record.route?.uncertain&&record.status==='approved')record.uncertain=true;
  }
+ if(reviewExisting)for(const record of records.values()){
+  const field=seenFields.get(record.fieldId);
+  if(!field.supported){record.status='unsupported';record.warning=true;continue;}
+  if(record.status==='needs_review'){record.warning=true;record.reason+=' 当前内容已保留，尚无可采用的素材答案。';}
+  if(record.status==='approved'&&field.hasValue){
+   if(String(field.currentValue)===record.proposal.value){record.status='unchanged';record.reason='已核对，与素材一致，无需改写';record.warning=!!field.reviewMark&&field.reviewMark!=='rejected';}
+   else{record.uncertain=true;record.corrected=true;record.reason='已有值与素材不一致，将纠正并标橙待确认';}
+  }
+ }
  for(const [id,issue] of relatedFieldWarnings(fields,records)){
   const record=records.get(id),field=seenFields.get(id);record.warning=true;record.ruleWarning=issue.reason;
   if(issue.block||!fastMode){record.status='needs_review';record.reason=issue.reason;}
   else if(record.status==='approved'){record.uncertain=true;record.reason=issue.reason;}
-  if(field.hasValue&&record.status==='skipped'){record.status='needs_review';record.reason=issue.reason;}
+  if(field.hasValue&&['skipped','unchanged'].includes(record.status)){record.status='needs_review';record.reason=issue.reason;}
   if(!record.proposal&&field.hasValue)record.proposal={fieldId:id,value:field.currentValue,evidence:[],reason:issue.reason};
  }
  // Write skill names before proficiency even when the page lists the controls in reverse order.
  for(const record of [...records.values()].sort((a,b)=>Number(/掌握程度|熟练程度/.test(seenFields.get(a.fieldId).label))-Number(/掌握程度|熟练程度/.test(seenFields.get(b.fieldId).label)))){
   if(record.status!=='approved')continue;const dependency=relatedFieldWarnings(fields,records).get(record.fieldId);if(dependency?.block){record.status='needs_review';record.warning=true;record.reason=dependency.reason;continue;}checkSignal(signal);await assertFresh();emit('fill',`正在填入并核验：${seenFields.get(record.fieldId).label}`);
-  const result=await apply(seenFields.get(record.fieldId),record.proposal.value,{uncertain:!!record.uncertain});
+  const result=await apply(seenFields.get(record.fieldId),record.proposal.value,{uncertain:!!record.uncertain,overwrite:overwrite||reviewExisting,...(reviewExisting?{expectedCurrent:seenFields.get(record.fieldId).currentValue||''}:{})});
   record.status=result.ok?(record.uncertain?'filled_review':'filled'):'failed';record.warning=record.warning||!result.ok;record.reason=(result.ok&&record.uncertain?'已填入 · 待你确认。':'')+result.reason+(record.ruleWarning?' '+record.ruleWarning:'');
 
  }
  for(const record of records.values())if(record.status==='failed')try{await planCache?.remove?.(seenFields.get(record.fieldId));}catch{}
  if(verifyWritten){
   checkSignal(signal);await assertFresh();emit('settling','正在整轮复核，检查网页是否保留填写结果…');
-  const written=[...records.values()].filter(r=>['filled','filled_review'].includes(r.status));
+  const written=[...records.values()].filter(r=>['filled','filled_review','unchanged'].includes(r.status));
   if(written.length)await reconcileWritten([...records.values()],await verifyWritten(written.map(r=>({...seenFields.get(r.fieldId),value:r.proposal.value}))),fields,planCache);
  }
  // Re-evaluate existing dependent values after a proposed peer fails or disappears at readback.

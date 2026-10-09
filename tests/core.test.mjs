@@ -380,3 +380,8 @@ test('oversized pairs split without losing audit coverage or the selected option
  const options=Array.from({length:5000},(_,i)=>({value:String(i),label:'选项'+i}));
  const [packet]=auditPackets([{...nameProposal,value:'42'}],[{...teamFields[0],options}],teamSources);assert.deepEqual(packet.payload.state.items[0].field.options,[options[42]]);
 });
+
+test('confirmed full dates project into Moka year/month controls without inventing precision',()=>{
+ const f={type:'custom-select',datePart:{boundary:'start',unit:'month'},options:[{value:'9',label:'9'}]};
+ assert.equal(defaultFieldValue(f,'2024-09-01'),'9');assert.equal(defaultFieldValue({...f,datePart:{boundary:'start',unit:'year'},options:[{value:'2024',label:'2024'}]},'2024-09'),'2024');assert.equal(defaultFieldValue(f,'2024'),null);assert.equal(defaultFieldValue(f,'2024-13'),null);
+});
