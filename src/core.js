@@ -1,3 +1,4 @@
+import {dateComponentNumber} from './date-components.js';
 export const BASE_FIELDS = [
   ['fullName','姓名',['姓名','中文姓名','真实姓名','full name','legal name','candidate name']],
   ['givenName','名 / Given name（单独填写）',['名','first name','given name']],
@@ -44,6 +45,15 @@ export function defaultFieldValue(field,value) {
   if(field.datePart){
     const date=value.match(/^(\d{4})[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?月?$/);
     if(date&&Number(date[2])>=1&&Number(date[2])<=12)value=field.datePart.unit==='year'?date[1]:String(Number(date[2]));
+    if(field.options?.length){
+      const component=dateComponentNumber(value,field.datePart.unit);
+      if(component===null){
+        const selected=field.options.filter(o=>!o.disabled&&o.value===value&&dateComponentNumber(o.label||o.value,field.datePart.unit)!==null);
+        return selected.length===1?selected[0].value:null;
+      }
+      const matching=field.options.filter(o=>!o.disabled&&String(o.value)!==''&&dateComponentNumber(o.label||o.value,field.datePart.unit)===component);
+      return matching.length===1?matching[0].value:null;
+    }
   }
   if(field.type==='date'||field.type==='month') {
     const match=value.match(/^(\d{4})[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?月?$/);

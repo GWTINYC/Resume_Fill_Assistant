@@ -5,9 +5,10 @@ import {mergeLearnedFacts,confirmationFacts,captureDraft,LEARN_CATEGORIES,learni
 import {routeExperienceFields} from './experience-routing.js';
 import {ensureRecordSlots} from './record-slots.js';
 import {runSequentialFill} from './sequential.js';
+import {localConcerns} from './collaboration.js';
 import {getApiKey,setApiKey,clearApiKey,getProvider,setProvider,listMaterials,materialsSnapshot,getRejectedAnswers,getLearnedFacts,connectPcKeys} from './storage.js';
 import {profileEntries,localMapping,defaultFieldValue,mappingPayload,optionPayload,acceptedChoice} from './core.js';
-import {applicantSources,DEEPSEEK_MODEL} from './deepseek.js';
+import {applicantSources,validateDeepseekFills,DEEPSEEK_MODEL} from './deepseek.js';
 const $=id=>document.getElementById(id);
 let experienceCategories=[],recordSections=[],entries=[],fields=[],plan=new Map(),tabId,token,profileSnapshot='',materialSnapshot='',savedProfile={},materials=[],provider='jev',busy=false,pageContext={},collaborationController=null;
 let reviewOnly=false,pageHost='',learnedFacts=[],learnedSnapshot='',learningDraft=[],rejectedAnswers=[],rejectedSnapshot='';
@@ -16,6 +17,39 @@ const usage={jev:0,deepseekInput:0,deepseekOutput:0};
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
 function lock(value){busy=value;$('collaborate').disabled=value;$('stop-collaboration').disabled=!value||!collaborationController;for(const id of ['scan','match','fill','confirm-fill','capture-page'])$(id).disabled=value||(!['scan','capture-page'].includes(id)&&!fields.length);for(const el of $('learning-fields').querySelectorAll('input,select,textarea'))el.disabled=value;for(const id of ['save-learning','cancel-learning'])$(id).disabled=value;for(const id of ['provider','save-key','clear-key','overwrite','review-existing','fill-uncertain','connect-pc-keys'])$(id).disabled=value;for(const el of $('fields').querySelectorAll('select,input,textarea,button'))el.disabled=value||el.dataset.unsupported==='true';}
 async function message(data){const r=await chrome.runtime.sendMessage(data);if(!r?.ok)throw Error(r?.error||'扩展未响应，请重新加载');return r;}
+async function assertCurrentPage(signal){
+ if(signal?.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');
+ const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==tabId)throw Error('当前标签页已切换，请回到目标网页后重试。');
+ const {profile}=await chrome.storage.local.get('profile');
+ if(JSON.stringify(profile||{})!==profileSnapshot||materialsSnapshot(await listMaterials())!==materialSnapshot||JSON.stringify(await getLearnedFacts())!==learnedSnapshot||JSON.stringify(await getRejectedAnswers())!==rejectedSnapshot)throw Error('个人资料、素材或反馈已变化，请重新启动协作。');
+}
+async function writeAndVerify(field,value,{uncertain=false,overwrite=false,expectedCurrent}={}){
+ const items=[{...field,value,...(expectedCurrent!==undefined?{expectedCurrent}:{})}];
+ const written=await message({action:'fill',tabId,token,overwrite,items}),first=written.results?.find(x=>x.id===field.id);
+ if(!first?.ok)return {ok:false,reason:first?.reason||'网页未返回填写结果'};
+ await new Promise(resolve=>setTimeout(resolve,250));
+ const verified=await message({action:'verify',tabId,token,items}),result=verified.results?.find(x=>x.id===field.id)||{ok:false,reason:'无法核验网页值，请手动检查'};
+ if(result.ok&&uncertain)await message({action:'mark-review',tabId,token,items:[{...field,value,mark:'uncertain'}]});
+ return result;
+}
+async function retryField(field){lock(true);try{
+ const p=plan.get(field.id);if(!p?.failedReview||!p.evidence?.length||typeof p.value!=='string'||!p.value.trim())throw Error('此项没有可重试的原文建议，请重新匹配或手动填写。');
+ await assertCurrentPage();
+ const sources=applicantSources(entries,savedProfile,materials),proposal={fieldId:field.id,value:p.value,evidence:p.evidence};
+ const checked=validateDeepseekFills({fills:[proposal]},[field],sources);
+ const concerns=localConcerns(field,proposal,entries);
+ if(!checked.fills.length||concerns.length)throw Error(concerns[0]||checked.issues[0]?.reason||'当前建议未通过原文和格式检查，请重新匹配。');
+ const read=await message({action:'read-current',tabId,token,items:[field]}),current=read.results?.find(x=>x.id===field.id);
+ if(!current?.ok)throw Error(current?.reason||'控件已变化，请重新扫描。');
+ await assertCurrentPage();
+ const result=await writeAndVerify(field,p.value,{uncertain:true,overwrite:true,expectedCurrent:current.value});
+ p.failedReview=!result.ok;p.pendingConfirmation=true;p.result=(result.ok?'已重试填入并核验，仍待你确认。':'重试失败：')+result.reason;
+ if(result.ok){p.filledValue=p.value;field.hasValue=true;field.currentValue=p.value;}
+ const record=watchRun?.records.find(r=>r.fieldId===field.id);
+ if(record){record.status=result.ok?'filled_review':'failed';record.warning=true;record.reason=p.result;record.proposal={...record.proposal,...proposal};}
+ status(p.result+(result.ok?' 未保存为学习资料。':''),!result.ok);
+ }catch(error){status(error.message,true);}finally{lock(false);render();}
+}
 function stopWatch(){clearInterval(watchTimer);watchTimer=null;watchRun=null;watchDirty=false;}
 function feedbackResolved(id,value){const record=watchRun?.records.find(r=>r.fieldId===id);if(record){record.feedbackResolved=true;if(value!==undefined){record.proposal.value=value;record.status='filled';record.warning=false;}else record.status='needs_review';}}
 function startWatch(records,cache,summary){
@@ -86,6 +120,7 @@ function render(){
     editor.value=p.value??'';editor.onchange=()=>{p.value=defaultFieldValue(f,editor.value);p.source='手动修改 DeepSeek 建议';p.edited=true;p.result=undefined;if(p.auditDescription)p.auditDescription='已手动修改，当前值尚未经过双 AI 校核';if(p.value===null||p.value===''){p.value=null;p.checked=false;}render();};card.append(editor);
   }else{const value=document.createElement('div');value.className='value';if(!f.supported)value.textContent=f.reason;else if(p.value!==null){const label=f.options?.find(x=>x.value===p.value)?.label;value.textContent=label?`${label}（${p.value}）`:String(p.value);}else value.textContent=p.entryId?'无法直接匹配网页格式或选项，可使用智能匹配或手动填写网页。':'尚无待填内容。';card.append(value);}
   if(f.supported&&p.value!==null&&p.value!==undefined){
+    if(p.failedReview&&p.evidence?.length){const retry=document.createElement('button');retry.className='small';retry.textContent='重试该建议';retry.setAttribute('aria-label',`${f.label} 重试该建议`);retry.disabled=busy;retry.onclick=()=>retryField(f);card.append(retry);}
     const confirm=document.createElement('button');confirm.className='small';confirm.textContent=p.filledValue?'接受此项并记住':'确认此项并填入、记住';confirm.disabled=busy;
     confirm.setAttribute('aria-label',`${f.label} 确认并记住`);confirm.onclick=()=>fillSelected({remember:true,ids:[f.id]});card.append(confirm);
     if(p.filledValue||p.failedReview){const current=document.createElement('button');current.className='small';current.textContent='采用网页修改并记住';current.setAttribute('aria-label',`${f.label} 采用网页修改`);current.disabled=busy;current.onclick=()=>acceptPageEdit(f);card.append(current);}
@@ -243,7 +278,7 @@ $('collaborate').onclick=async()=>{
   if(controller.signal.aborted)throw new DOMException('协作已停止','AbortError');
   await scanCurrent(false);const sources=applicantSources(entries,savedProfile,materials);if(!sources.length)throw Error('请先导入素材或保存个人资料，再启动协作。');
   const overwrite=$('overwrite').checked,reviewExisting=$('review-existing').checked;
-  const assertFresh=async()=>{if(controller.signal.aborted)throw new DOMException('协作已停止；已填内容保留。','AbortError');const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id!==tabId)throw Error('当前标签页已切换，已停止协作填写。');const {profile}=await chrome.storage.local.get('profile');if(JSON.stringify(profile||{})!==profileSnapshot||materialsSnapshot(await listMaterials())!==materialSnapshot||JSON.stringify(await getLearnedFacts())!==learnedSnapshot||JSON.stringify(await getRejectedAnswers())!==rejectedSnapshot)throw Error('个人资料或素材已变化，请重新启动协作。');};
+  const assertFresh=()=>assertCurrentPage(controller.signal);
   const prepared=await ensureRecordSlots({sources,sections:recordSections,fields,knownCategories:experienceCategories,assertFresh,onProgress:text=>status(text),
     add:(section,target)=>message({action:'add-record',tabId,token,frameId:section.frameId,sectionId:section.localId,target}),
     rescan:async()=>{const r=await message({action:'scan',tabId});token=r.token;fields=r.fields;recordSections=r.sections||[];experienceCategories=r.experienceCategories||[];fields=routeExperienceFields(fields,applicantSources(entries,savedProfile,materials),recordSections,experienceCategories);pageContext=r.pageContext||{};plan.clear();for(const f of fields)setEntry(f,preferredLearned(f,entries).at(0)||localMapping(f,entries.filter(e=>learnedSourceAllowed(f,e)))||'','新增后重新扫描');render();return recordSections;}
@@ -256,7 +291,7 @@ $('collaborate').onclick=async()=>{
     draft:async(batch,workflow)=>{const r=await message({action:'deepseek-fill',fields:batch,sources,workflow});usage.deepseekInput+=r.usage?.prompt_tokens||0;usage.deepseekOutput+=r.usage?.completion_tokens||0;return r;},
     judge:async payload=>{const r=await message({action:'evaluate',payload});usage.jev+=r.usage?.input_tokens||0;return r;},
     verifyWritten:async items=>{await new Promise(r=>setTimeout(r,1200));await assertFresh();return (await message({action:'verify',tabId,token,items})).results||[];},
-    apply:async(f,value,{uncertain,overwrite:writeOverwrite,expectedCurrent})=>{const items=[{...f,value,...(expectedCurrent!==undefined?{expectedCurrent}:{})}];const written=await message({action:'fill',tabId,token,overwrite:writeOverwrite,items});const first=written.results?.find(x=>x.id===f.id);if(!first?.ok)return {ok:false,reason:first?.reason||'网页未返回填写结果'};await new Promise(resolve=>setTimeout(resolve,250));const verified=await message({action:'verify',tabId,token,items});const result=verified.results?.find(x=>x.id===f.id)||{ok:false,reason:'无法核验网页值，请手动检查'};if(result.ok&&uncertain)await message({action:'mark-review',tabId,token,items:[{...f,value,mark:'uncertain'}]});return result;}
+    apply:writeAndVerify
   });
   const marked=result.filter(r=>r.warning&&r.proposal);if(marked.length)await message({action:'mark-review',tabId,token,items:marked.map(r=>({...fields.find(f=>f.id===r.fieldId),value:r.proposal.value,mark:r.status==='failed'?'changed':'uncertain'}))});
   const warnings=result.filter(x=>x.auditBlocked).map(x=>x.reason);

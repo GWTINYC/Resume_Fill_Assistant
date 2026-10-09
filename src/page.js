@@ -20,7 +20,8 @@ export async function pageBridge(args) {
   const recordRoots=template?.record||'.form,[class*="apply-fields-"],.form-cell-inner';
   const beisenRoots='.constant-main-selector-container,.area-selector-container,.phoenix-calendar';
   const popupRoots=beisenRoots+',[role="listbox"],.phoenix-selectList,[class*="sd-Select-menu-"],.ant-select-dropdown,.el-select-dropdown,.ant-cascader-menus,.ant-cascader-dropdown,.el-cascader__dropdown';
-  const visible=el=>el?.isConnected&&el.getClientRects().length>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none'&&!el.closest('[inert],[hidden]')&&(capturing||!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.closest('.phoenix-select--disabled,.ant-select-disabled,.el-select.is-disabled,.ant-cascader-disabled,.el-cascader.is-disabled,[class*=sd-Select-containerDisabled-]')&&(!el.matches(mokaSelect)||!el.querySelector('input:disabled')));
+  const displayed=el=>el?.isConnected&&el.getClientRects().length>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none'&&!el.closest('[inert],[hidden]');
+  const visible=el=>displayed(el)&&(capturing||!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.closest('.phoenix-select--disabled,.ant-select-disabled,.el-select.is-disabled,.ant-cascader-disabled,.el-cascader.is-disabled,[class*=sd-Select-containerDisabled-]')&&(!el.matches(mokaSelect)||!el.querySelector('input:disabled')));
   const labelText=node=>{const copy=node.cloneNode(true);for(const child of copy.querySelectorAll('input,select,textarea,button,[role="combobox"],script,style,.labelRequired,.anticon'))child.remove();return copy.textContent||'';};
   const itemOf=el=>template?.field&&el.closest(template.field)||el.closest('.form-item,.ant-form-item,.el-form-item,.form-group,[class*=apply-field-]');
   const itemLabel=el=>{const item=itemOf(el);const label=template?.fieldLabel&&item?.querySelector(template.fieldLabel)||item?.querySelector('.form-item__text,.ant-form-item-label,.el-form-item__label,.control-label,[class*=title-],label');return label?labelText(label):'';};
@@ -37,6 +38,7 @@ export async function pageBridge(args) {
   };
   const dependentDefaults=globalThis.__jevDependentDefaults||(globalThis.__jevDependentDefaults=new WeakMap());
   const ownsDefault=(el,value)=>{const d=dependentDefaults.get(el);return !!d&&d.value===value&&d.year.isConnected&&d.year.querySelector('[class*=sd-Input-display-value-]')?.textContent.trim()===d.yearValue;};
+  const watchDefault=el=>{if(datePartOf(el)?.unit!=='month'||globalThis.__jevDefaultListeners?.has(el))return;(globalThis.__jevDefaultListeners||(globalThis.__jevDefaultListeners=new WeakSet())).add(el);el.addEventListener('pointerdown',event=>{if(event.isTrusted)dependentDefaults.delete(el);},true);};
   const mokaLookup=el=>el.matches(mokaSelect)&&(template?.lookupLabels||['学校名称','专业名称']).includes(labelOf(el))&&!!searchInput(el);
   const dateLabel=part=>`${part.boundary==='start'?'开始':part.boundary==='end'?'结束':''}${part.unit==='year'?'年份':'月份'}`;
   const groupLabel=el=>clean(itemLabel(el)||el.closest('fieldset')?.querySelector('legend')?.innerText||el.closest('[role="radiogroup"]')?.getAttribute('aria-label')||'');
@@ -78,6 +80,34 @@ export async function pageBridge(args) {
     return [title,index>=0?`第 ${index+1} 条（页面顺序，同组字段属于同一经历）`:'',peers.length?'同组字段：'+peers.join('、'):''].filter(Boolean).join(' · ').slice(0,600);
   };
   const signature=(el,radio)=>JSON.stringify([radio?groupLabel(el):labelOf(el),el.getAttribute('name'),el.tagName,el.type,contextOf(el),datePartOf(el)]);
+  const refreshEntry=entry=>{
+    if(entry.el.isConnected)return true;
+    if(entry.radios||entry.kind==='custom-radio')return false;
+    const anchor=entry.scope?.isConnected?entry.scope:entry.recordAnchor?.isConnected?entry.recordAnchor:null;
+    if(!anchor||anchor===document.body||anchor===document.documentElement)return false;
+    const controls=[...anchor.querySelectorAll('input,textarea,select,'+selectRoots)].filter(n=>displayed(n)&&!n.closest(popupRoots)&&!n.parentElement?.closest(selectRoots));
+    let matches=controls.filter(n=>signature(n,false)===entry.signature);
+    // Preserve the existing Moka full-name transition, only in its surviving field.
+    if(!matches.length&&anchor===entry.scope&&/^(学校名称|专业名称)$/.test(entry.fieldLabel)&&anchor.closest('[class*=apply-block-]'))matches=controls.filter(n=>labelOf(n)===entry.fieldLabel&&contextOf(n)===entry.context);
+    if(matches.length!==1)return false;
+    const replacement=matches[0];
+    const original=entry.el,review=globalThis.__jevReviewValues?.get(original);
+    const originalReviewNode=entry.reviewNode||(entry.kind?original:original.closest('label')||original),reviewStyle=globalThis.__jevReviewStyles?.get(originalReviewNode);
+    if(entry.kind&&replacement.matches('input,textarea,select')){
+      if(!/^(学校名称|专业名称)$/.test(entry.fieldLabel)||anchor!==entry.scope)return false;
+      entry.kind=null;entry.selectionMode=null;entry.options=undefined;
+    }else if(!entry.kind&&!replacement.matches('input,textarea,select'))return false;
+    if(mokaLookup(replacement)){entry.kind='moka-lookup';entry.selectionMode='search';entry.options=[];}
+    entry.el=replacement;entry.scope=itemOf(replacement)||entry.scope;entry.signature=signature(replacement,false);watchDefault(replacement);
+    if(review){
+      const value=entry.kind?customValue(entry):replacement.value||'';
+      globalThis.__jevReviewValues.set(replacement,{...review,reviewMark:String(value)===String(review.reviewValue)?review.reviewMark:'changed'});
+      const node=entry.kind?replacement:replacement.closest('label')||replacement;
+      if(reviewStyle&&node!==originalReviewNode&&node.style.outline===originalReviewNode.style.outline&&node.style.outlineOffset===originalReviewNode.style.outlineOffset)globalThis.__jevReviewStyles.set(node,{...reviewStyle});
+      entry.reviewNode=node;
+    }
+    return true;
+  };
   const consent=/同意|隐私|条款|声明|承诺|订阅|验证码|密码|consent|privacy|terms|agree|declaration|certif|subscribe|password|captcha/i;
   const choiceSelector='[role="option"],.phoenix-selectList__listItem,[class*=sd-Menu-content-item-],.ant-select-item-option,.ant-select-dropdown-menu-item,.el-select-dropdown__item,.ant-cascader-menu-item,.el-cascader-node';
   const radioSelector='.phoenix-radio,[role="radio"]';
@@ -97,7 +127,7 @@ export async function pageBridge(args) {
     return display(el.getAttribute('aria-valuetext')||(el.tagName==='INPUT'?el.value:el.querySelector('input')?.value)||'');
   };
   const popupCache=new WeakMap();
-  const outerMenu=node=>node.closest('.ant-select-dropdown,.el-select-dropdown,.ant-cascader-dropdown,.ant-cascader-menus,.el-cascader__dropdown')||node;
+  const outerMenu=node=>node.closest('.ant-select-dropdown,.el-select-dropdown,.ant-cascader-dropdown,.ant-cascader-menus,.el-cascader__dropdown')||node.closest('[role="listbox"]')||node;
   const popupFor=el=>{
     const linked=[el,...el.querySelectorAll('[aria-controls],[aria-owns]')];
     const ids=[...new Set(linked.flatMap(n=>[n.getAttribute('aria-controls'),n.getAttribute('aria-owns')]).filter(Boolean).join(' ').split(/\s+/))];
@@ -126,12 +156,14 @@ export async function pageBridge(args) {
     if(rect.top<0||rect.bottom>innerHeight){el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});await pause(100);}
     for(let attempt=0;attempt<2;attempt++){
       const before=new Set([...document.querySelectorAll(popupRoots)].map(outerMenu).filter(visible));press(trigger(el));
-      for(let i=0;i<25;i++){
-        await pause(60);popup=popupFor(el);if(popup)return popup;
+      popup=await waitForChange(()=>{
+        popup=popupFor(el);if(popup)return popup;
         // Portal menus can be outside the field. Only one newly visible menu is safe.
         const fresh=[...new Set([...document.querySelectorAll(popupRoots)].map(outerMenu).filter(n=>visible(n)&&!before.has(n)))];
         if(fresh.length===1){popupCache.set(el,fresh[0]);return fresh[0];}
-      }
+        return null;
+      },1500);
+      if(popup)return popup;
       // A missed opening may be retried once; never toggle an unassociated open menu.
       if(!visible(el)||[...document.querySelectorAll(popupRoots)].some(visible))break;
     }
@@ -197,7 +229,16 @@ export async function pageBridge(args) {
     const text=popup.querySelector('.select-data-num,.selected-area-title,.right-container')?.textContent||'';
     return Number(text.match(/(?:已选[^\d]*)?\d+\s*[/／]\s*(\d+)/)?.[1])||null;
   };
-  const waitUntil=async(fn,code,message)=>{for(let i=0;i<30;i++){const result=fn();if(result)return result;await pause(80);}throw Error(`[${code}] ${message}`);};
+  // Wake on inserted menus, remounted controls and visibility transitions. Timers
+  // remain a bounded fallback for property-only updates which do not mutate DOM.
+  const waitForChange=(fn,timeoutMs=2400)=>new Promise((resolve,reject)=>{
+    let observer,timer,poll,done=false;
+    const finish=(value,error)=>{if(done)return;done=true;observer?.disconnect();clearTimeout(timer);clearInterval(poll);error?reject(error):resolve(value);};
+    const check=()=>{if(done)return;try{const value=fn();if(value)finish(value);}catch(error){finish(null,error);}};
+    observer=new MutationObserver(check);observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','style','hidden','aria-expanded','aria-selected']});
+    timer=setTimeout(()=>finish(null),timeoutMs);poll=setInterval(check,80);check();
+  });
+  const waitUntil=async(fn,code,message,timeoutMs)=>{const result=await waitForChange(fn,timeoutMs);if(result)return result;throw Error(`[${code}] ${message}`);};
   const textInput=(input,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true,composed:true}));};
   const confirmDialog=async(popup)=>{
     const button=dialogButton(popup,'确定');if(!button)throw Error('[SELECT_CONFIRM] 弹窗没有唯一可用的确定按钮');
@@ -379,9 +420,10 @@ export async function pageBridge(args) {
       if(el.tagName==='SELECT'){supported=!el.multiple;options=[...el.options].map(o=>({value:o.value,label:clean(o.textContent),disabled:o.disabled||o.parentElement?.disabled===true}));}
       if(radios)options=radios.map(o=>({value:o.value,label:clean(o.closest('label')?labelText(o.closest('label')):labelOf(o)),disabled:!visible(o)}));
       if(options?.length>250||options&&new Set(options.map(o=>o.value)).size!==options.length)supported=false;
-      const id='f'+fields.length,entry={el,radios,kind,selectionMode,calendarType,scope:itemOf(el),fieldLabel:labelOf(el),context:contextOf(el),signature:signature(el,!!radios),options};
+      const anchor=sectionInfo(el),recordAnchor=anchor.form||el.closest('form,fieldset,section,article,[role="group"]');
+      const id='f'+fields.length,entry={el,radios,kind,selectionMode,calendarType,scope:itemOf(el),recordAnchor,fieldLabel:labelOf(el),context:contextOf(el),signature:signature(el,!!radios),options};
       const current=kind?customValue(entry):radios?(radios.find(x=>x.checked)?.value||''):(el.value||'');let hasValue=!!current&&!ownsDefault(el,current);
-      if(datePart?.unit==='month'&&!globalThis.__jevDefaultListeners?.has(el)){(globalThis.__jevDefaultListeners||(globalThis.__jevDefaultListeners=new WeakSet())).add(el);el.addEventListener('pointerdown',event=>{if(event.isTrusted)dependentDefaults.delete(el);},true);}
+      watchDefault(el);
       if(el.tagName==='SELECT'){const selected=el.selectedOptions[0];if(selected&&(/^(请选择|选择|please select|select|choose|--)/i.test(clean(selected.textContent))||selected.disabled))hasValue=false;}
       const item=itemOf(el);const maxLength=el.maxLength>0?el.maxLength:Number(item?.querySelector('.phoenix-textarea')?.textContent.match(/\/\s*(\d+)/)?.[1])||null;
       let capturedValue,captureWarning;
@@ -411,16 +453,12 @@ export async function pageBridge(args) {
     const results=[];
     for(const item of args.items){
       const entry=state.entries.get(item.id);if(!entry){results.push({id:item.id,ok:false,reason:'字段已失效'});continue;}
-      // Moka remounts the major control after school selection and after custom-name commit.
-      // Rebind only inside the same surviving field/record, never by page-wide label matching.
-      if(!entry.el.isConnected&&/^(学校名称|专业名称)$/.test(entry.fieldLabel)&&entry.scope?.isConnected&&entry.scope.closest('[class*=apply-block-]')){
-        const matches=[...entry.scope.querySelectorAll(mokaSelect+',input')].filter(n=>visible(n)&&!n.parentElement?.closest(mokaSelect)&&labelOf(n)===entry.fieldLabel&&contextOf(n)===entry.context);
-        if(matches.length===1){const replacement=matches[0];entry.el=replacement;entry.kind=replacement.matches(mokaSelect)?'moka-lookup':null;entry.selectionMode=entry.kind?'search':null;entry.options=entry.kind?[]:undefined;entry.signature=signature(replacement,false);}
-      }
-      const {el,radios,kind}=entry;
+      if(!refreshEntry(entry)){results.push({id:item.id,ok:false,reason:'[FIELD_REPLACED] 原控件已重新生成，无法在原字段或经历中唯一定位，请重新扫描'});continue;}
+      let {el,radios,kind}=entry;
       if((args.action!=='fill'?!el.isConnected:(!visible(el)||el.readOnly&&!kind))||signature(el,!!radios)!==entry.signature){results.push({id:item.id,ok:false,reason:'字段已变化，请重新扫描'});continue;}
       if(args.action==='mark-review'){
         const node=kind?el:el.closest('label')||el;
+        entry.reviewNode=node;
         const styles=globalThis.__jevReviewStyles||(globalThis.__jevReviewStyles=new WeakMap());
         if(!styles.has(node))styles.set(node,{outline:node.style.outline,offset:node.style.outlineOffset,title:node.getAttribute('title')});
         const original=styles.get(node);const reviews=globalThis.__jevReviewValues||(globalThis.__jevReviewValues=new WeakMap());if(item.mark)reviews.set(el,{reviewValue:item.value,reviewMark:item.mark});else reviews.delete(el);
@@ -483,8 +521,8 @@ export async function pageBridge(args) {
                 if(!option&&!clicked)throw Error('[SELECT_NO_MATCH] 搜索或滚动后没有唯一对应的可用选项，请核对素材与网页选项');
                 if(option){press(option.node);clicked=true;}
               }
-              for(let i=0;i<20&&!selectedEquals(entry,value);i++)await pause(80);
-              if(!selectedEquals(entry,value))throw Error('[SELECT_NOT_COMMITTED] 已点击选项，但网页未保留预期选择');
+              await waitUntil(()=>refreshEntry(entry)&&selectedEquals(entry,value),'SELECT_NOT_COMMITTED','已点击选项，但网页未保留预期选择',1600);
+              el=entry.el;
               // An input's search query alone is not proof of committed selection.
               if(el.matches('input')&&popupFor(el))throw Error('[SELECT_NOT_COMMITTED] 搜索文字尚未确认为已选值');
             }finally{
@@ -500,6 +538,7 @@ export async function pageBridge(args) {
           // Phoenix composite inputs activate their editable state on click, not focus alone.
           const activate=['INPUT','TEXTAREA'].includes(el.tagName)&&!['date','month','number'].includes(el.type);
           if(activate)press(el);el.focus();if(activate)await pause(120);
+          if(!el.isConnected&&refreshEntry(entry)){el=entry.el;target=el;el.focus();}
           if(!visible(el)||el.readOnly||signature(el,false)!==entry.signature)throw Error('激活后字段已变化，请重新扫描');
           if(String(el.value||'')!==String(current||''))throw Error('激活期间网页值已变化，未覆盖，请重新扫描');
           Object.getOwnPropertyDescriptor(proto,'value').set.call(el,value);if(el.value!==value){Object.getOwnPropertyDescriptor(proto,'value').set.call(el,current||'');throw Error('该控件不接受此格式');}
@@ -514,7 +553,7 @@ export async function pageBridge(args) {
           if(!blurred&&!radios){target.dispatchEvent(new FocusEvent('blur',{composed:true}));target.dispatchEvent(new FocusEvent('focusout',{bubbles:true,composed:true}));}
         }
         if(part?.unit==='month')dependentDefaults.delete(el);
-        for(const peer of defaultPeers){const changed=customValue(peer);if(changed)dependentDefaults.set(peer.el,{value:changed,year:el,yearValue:value});}
+        for(const peer of defaultPeers){if(!refreshEntry(peer))continue;const changed=customValue(peer);if(changed)dependentDefaults.set(peer.el,{value:changed,year:el,yearValue:value});}
         results.push({id:item.id,ok:true,reason:target.validity&&!target.validity.valid?'已填入，但网页格式校验未通过，请检查':'已填入'});
       }catch(e){results.push({id:item.id,ok:false,reason:e.message||'填写失败'});}
     }

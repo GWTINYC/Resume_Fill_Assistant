@@ -73,6 +73,8 @@ export function recordEvidenceMatches(field,evidence,index,sources){
   if(structured)return structured[1]===expected.category&&Number(structured[2])+1===expected.record&&source.text.includes(e.quote);
   const ranges=relevant.filter(r=>r.sourceId===e.sourceId&&r.record===expected.record);
   if(ranges.length)return ranges.some(r=>source.text.slice(r.start,r.end).includes(e.quote));
+  // A source with explicit record boundaries cannot stand in for an absent record.
+  if(relevant.some(r=>r.sourceId===e.sourceId))return false;
   // A named section cannot borrow another named section's evidence when its own is absent.
   return !index.passages.some(p=>p.sourceId===e.sourceId&&p.category!=='general'&&p.category!==expected.category&&p.text.includes(e.quote));
  });
